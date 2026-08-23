@@ -48,7 +48,7 @@ class DatabaseConnection:
         self._migrate()
 
     def _migrate(self):
-        """存量库迁移：为 modules 表补充 is_nsfw 列。"""
+        """存量库迁移：为 modules 表补充 is_nsfw 列 + 补充 P0-01 索引。"""
         cols = [r[1] for r in self._conn.execute("PRAGMA table_info(modules)").fetchall()]
         if "is_nsfw" not in cols:
             self._conn.execute(
@@ -56,6 +56,24 @@ class DatabaseConnection:
             )
             self._conn.commit()
             log.info("迁移：modules 表新增 is_nsfw 列。")
+
+        # P0-01：补充历史/收藏/模板查询索引（幂等）
+        try:
+            self._conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_assemblies_favorite "
+                "ON assemblies(is_favorite) WHERE is_deleted = 0"
+            )
+            self._conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_assemblies_created "
+                "ON assemblies(created_at DESC) WHERE is_deleted = 0"
+            )
+            self._conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_templates_created "
+                "ON templates(created_at DESC) WHERE is_deleted = 0"
+            )
+            self._conn.commit()
+        except Exception as e:
+            log.debug(f"P0-01 索引迁移跳过/失败（可忽略）: {e}")
 
     def get_connection(self) -> sqlite3.Connection:
         return self._conn  # type: ignore[return-value]

@@ -84,3 +84,53 @@ class AssemblyConfig:
     use_weight_brackets: bool = True             # 是否自动添加权重括号
     model_profile: str = "sd"                    # 模型配置：sd / mj / flux
     sort_by: str = "dimensionOrder"               # 排序方式：dimensionOrder / customDragOrder
+
+
+# ------------------------------------------------------------------
+# P0-01 历史/收藏/模板 领域模型（零破坏增量）
+# ------------------------------------------------------------------
+@dataclass
+class Assembly:
+    """拼装方案快照（对应 assemblies 表）"""
+    id: str
+    title: str | None
+    prompt_ir_json: str          # JSON 快照
+    final_prompt: str
+    model_profile: str
+    created_at: int
+    is_favorite: bool = False
+    is_deleted: bool = False
+
+
+@dataclass
+class AssemblyItemRow:
+    """拼装明细行（对应 assembly_items 表）"""
+    id: str
+    assembly_id: str
+    module_id: str
+    sort_order: int
+    weight_override: float | None
+    is_locked: bool
+
+
+@dataclass
+class Template:
+    """模板（对应 templates 表）"""
+    id: str
+    name: str
+    description: str | None
+    config_json: str             # AssemblyConfig + enabled_dimension_keys JSON
+    cover_prompt: str | None
+    created_at: int
+    is_deleted: bool = False
+
+
+@dataclass
+class BatchCardModel:
+    """批量结果 Card 轻量模型（不入库，仅 UI 层）"""
+    index: int                   # 1-based
+    ir: PromptIR
+    final_prompt: str            # adapt_to_model 后的最终字符串
+    warnings: list[str]
+    dim_keys: list[str]          # 用于 chips
+    hash: str                    # ir.hash()
