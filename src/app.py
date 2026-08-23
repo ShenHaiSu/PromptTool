@@ -68,11 +68,11 @@ def main():
     # 启动 UI（P02：768p 屏溢出保护 + 主题由 MainWindow 内部 pmf.json 决定）
     root = MainWindow(str(DB_PATH), str(SCHEMA_PATH))
     root.title(WINDOW_TITLE)
-    # 900 高在 768p 溢出时回退 860
+    # 1080 高在小屏溢出时回退 1000
     try:
         sh = root.winfo_screenheight()
-        if sh and sh < 900:
-            root.geometry("1400x860")
+        if sh and sh < 1080:
+            root.geometry("1600x1000")
         else:
             root.geometry(WINDOW_SIZE)
     except Exception:

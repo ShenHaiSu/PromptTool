@@ -242,7 +242,7 @@ class MainWindow(tk.Tk):
             return
         try:
             self.update_idletasks()
-            total = self.paned.winfo_width() or 1400
+            total = self.paned.winfo_width() or 1600
             # 存的是比例
             if all(isinstance(v, float) and 0 < v < 1 for v in sash):
                 pos0 = int(total * sash[0])
@@ -260,7 +260,7 @@ class MainWindow(tk.Tk):
 
     def _save_pmf_state(self):
         try:
-            total = self.paned.winfo_width() or 1400
+            total = self.paned.winfo_width() or 1600
             ratios: list[float] = []
             for i in range(2):
                 try:
