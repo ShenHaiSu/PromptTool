@@ -7,8 +7,8 @@ Python + tkinter + sqlite3 构建的文生图提示词规模化管理桌面端�
 ## 快速开始
 
 ```bash
-# 安装依赖（运行时零三方包，仅测试依赖）
-pip install -r requirements.txt
+# 安装依赖
+pip install -r requirements.txt  # 含 sv-ttk>=2.6 主题（可选，缺失时回退 clam）
 
 # 运行单元测试
 python -m pytest -v
@@ -17,9 +17,9 @@ python -m pytest -v
 python src/app.py
 ```
 
-## 交付闭环
+## 交付闭环（V2.0 TopBar）
 
-启动程序 → 11 维与条目自动初始化 → 左栏浏览/搜索/新建条目 → 双击条目加入中栏 → 中栏上移/下移/调权重/锁定/删除 → 右栏实时预览 SD 提示词与 IR → 随机批量去重 → 一键复制 → 导出 CSV。
+顶部通栏常驻预览（prompt 全文 + 冲突 badge + IR 折叠）→ 左栏实时搜索 + NSFW 筛选 → 中栏 Chips 画布（拖拽排序 + 点击改权重 + 锁定/删除）→ 右栏批量工厂全高 Card 流 + 资产库（历史/收藏/模板）→ 视图明暗主题一键切换 → 快捷键 Ctrl+F/S/C → 随机批量去重 → 一键复制/导出 CSV。
 
 ## 项目结构
 

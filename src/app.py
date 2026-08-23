@@ -12,13 +12,14 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 from config import (
     DB_PATH, SCHEMA_PATH, WINDOW_TITLE, WINDOW_SIZE, SAMPLE_PROMPT_DIR,
+    WINDOW_MIN_SIZE,
 )
 from db.connection import DatabaseConnection
 from db.seed import seed_data, mark_nsfw_modules, ensure_dimensions, repair_display_names, disable_deprecated_gender_modules
 from db.sample_importer import import_sample_prompts
 from db.repository import DimensionRepository
 from ui.main_window import MainWindow
-from ui.styles import apply_style
+from ui.styles import apply_style  # noqa: F401 (保留供外部引用)
 
 # 日志文件名已从 pmf_demo.log 更名为 pmf.log；此处做一次旧文件迁移
 _legacy_log = Path(__file__).parent / "pmf_demo.log"
@@ -64,10 +65,22 @@ def main():
 
     conn.close()
 
-    # 启动 UI
+    # 启动 UI（P02：768p 屏溢出保护 + 主题由 MainWindow 内部 pmf.json 决定）
     root = MainWindow(str(DB_PATH), str(SCHEMA_PATH))
     root.title(WINDOW_TITLE)
-    root.geometry(WINDOW_SIZE)
+    # 900 高在 768p 溢出时回退 860
+    try:
+        sh = root.winfo_screenheight()
+        if sh and sh < 900:
+            root.geometry("1400x860")
+        else:
+            root.geometry(WINDOW_SIZE)
+    except Exception:
+        root.geometry(WINDOW_SIZE)
+    try:
+        root.minsize(*WINDOW_MIN_SIZE)
+    except Exception:
+        pass
 
     log.info("窗口已显示，进入主循环。")
     root.mainloop()

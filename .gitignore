@@ -65,6 +65,7 @@ data/pmf.db
 data/pmf.db-wal
 data/pmf.db-shm
 data/pmf.db-journal
+data/pmf.json
 data/backups/
 *.db-journal
 *.sqlite

@@ -87,9 +87,9 @@ class HistoryPanel(ttk.Frame):
         else:
             self.history_search_var = var
 
-        # Treeview：时间 | 标题 | 预览 | ★
+        # Treeview：时间 | 标题 | 预览 | ★（P02：fill 自适应，空状态）
         columns = ("time", "title", "preview", "fav")
-        tree = ttk.Treeview(parent, columns=columns, show="headings", height=8)
+        tree = ttk.Treeview(parent, columns=columns, show="headings")
         tree.heading("time", text="时间")
         tree.heading("title", text="标题")
         tree.heading("preview", text="预览")
@@ -129,7 +129,7 @@ class HistoryPanel(ttk.Frame):
         ttk.Button(top, text="刷新", width=6, command=self.refresh_templates).pack(side=tk.RIGHT, padx=2)
 
         columns = ("name", "desc", "time")
-        tree = ttk.Treeview(parent, columns=columns, show="headings", height=8)
+        tree = ttk.Treeview(parent, columns=columns, show="headings")
         tree.heading("name", text="名称")
         tree.heading("desc", text="描述")
         tree.heading("time", text="创建时间")
@@ -188,6 +188,10 @@ class HistoryPanel(ttk.Frame):
     def _fill_history_tree(self, tree: ttk.Treeview, items: list[Assembly]):
         for iid in tree.get_children():
             tree.delete(iid)
+        if not items:
+            # 空状态占位
+            tree.insert("", tk.END, iid="_empty", values=("", "暂无数据", "", ""))
+            return
         for asm in items:
             preview = (asm.final_prompt or "")[:40]
             fav_mark = "★" if asm.is_favorite else ""
@@ -197,6 +201,9 @@ class HistoryPanel(ttk.Frame):
     def _fill_template_tree(self, items: list[Template]):
         for iid in self.template_tree.get_children():
             self.template_tree.delete(iid)
+        if not items:
+            self.template_tree.insert("", tk.END, iid="_empty", values=("暂无模板", "", ""))
+            return
         for t in items:
             self.template_tree.insert("", tk.END, iid=t.id,
                                       values=(t.name, (t.description or "")[:30], _fmt_time(t.created_at)))

@@ -15,10 +15,16 @@ SCHEMA_PATH = SRC_ROOT / "db" / "schema.sql"
 SAMPLE_PROMPT_DIR = PROJECT_ROOT / "docs" / "samplePrompt"
 BACKUP_DIR = DATA_DIR / "backups"
 
-# 窗口配置
+# 窗口配置（P02）
 WINDOW_TITLE = "Prompt Modular Factory — 正式版"
-WINDOW_SIZE = "1400x800"
-WINDOW_MIN_SIZE = (1000, 600)
+WINDOW_SIZE = "1400x900"
+WINDOW_MIN_SIZE = (1100, 650)
+TOPBAR_HEIGHT_COLLAPSED = 88
+TOPBAR_HEIGHT_EXPANDED = 168
+LAYOUT_WEIGHTS = {"left": 30, "center": 38, "right": 32}
+SIDEBAR_WIDTH = {"min": 260, "default": 320, "max": 420}
+THEME_DEFAULT = "light"
+PMF_JSON = DATA_DIR / "pmf.json"
 
 # 默认拼装配置
 DEFAULT_SEPARATOR = ", "

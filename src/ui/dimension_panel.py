@@ -1,7 +1,5 @@
 """
-左栏：维度/条目管理面板。
-
-Treeview 展示 14 维度及条目，支持双击选词、搜索、新建/编辑/删除/启禁用，NSFW 列 √/×。
+左栏：维度/条目管理面板（P02：实时搜索 + NSFW 筛选 + 290px 列宽 + Tooltip）。
 """
 from __future__ import annotations
 import tkinter as tk
@@ -11,6 +9,7 @@ from typing import Callable, Optional
 
 from engine.models import Dimension, Module
 from db.repository import DimensionRepository, ModuleRepository
+from ui.styles import TOKENS_LIGHT
 
 log = logging.getLogger(__name__)
 
@@ -20,10 +19,12 @@ class DimensionPanel(ttk.Frame):
 
     def __init__(self, parent, on_module_selected: Callable, repos: dict):
         super().__init__(parent)
-        self.on_module_selected = on_module_selected  # 回调函数
+        self.on_module_selected = on_module_selected
         self.module_repo: ModuleRepository = repos["module"]
         self.dimension_repo: DimensionRepository = repos["dimension"]
-        self._module_cache: dict[str, Module] = {}  # module_id → Module
+        self._module_cache: dict[str, Module] = {}
+        self._nsfw_only: bool = False
+        self._search_after: str | None = None
         self._build_ui()
         self._load_data()
 
@@ -32,14 +33,23 @@ class DimensionPanel(ttk.Frame):
         search_frame = ttk.Frame(self)
         search_frame.pack(fill=tk.X, padx=4, pady=4)
         self.search_var = tk.StringVar()
+        self.search_var.trace_add("write", self._on_search_live)
         entry = ttk.Entry(search_frame, textvariable=self.search_var)
         entry.pack(side=tk.LEFT, fill=tk.X, expand=True)
+        self._search_entry = entry
         entry.bind("<Return>", lambda e: self._on_search())
         ttk.Button(search_frame, text="搜索", command=self._on_search).pack(
             side=tk.RIGHT, padx=(4, 0)
         )
 
-        # Treeview — 三列：权重 / NSFW / 状态
+        # 筛选 pill 行
+        pill_frame = ttk.Frame(self)
+        pill_frame.pack(fill=tk.X, padx=4, pady=(0, 4))
+        self.nsfw_btn = ttk.Button(pill_frame, text="NSFW 筛选: 全部", width=14, command=self._toggle_nsfw_filter)
+        self.nsfw_btn.pack(side=tk.LEFT, padx=2)
+        ttk.Button(pill_frame, text="清空搜索", width=10, command=self._clear_search).pack(side=tk.LEFT, padx=4)
+
+        # Treeview
         tree_frame = ttk.Frame(self)
         tree_frame.pack(fill=tk.BOTH, expand=True, padx=4, pady=2)
         self.tree = ttk.Treeview(
@@ -47,7 +57,7 @@ class DimensionPanel(ttk.Frame):
             columns=("weight", "nsfw", "status"),
             show="tree headings",
         )
-        self.tree.column("#0", width=260)
+        self.tree.column("#0", width=290)
         self.tree.column("weight", width=55, anchor=tk.CENTER)
         self.tree.column("nsfw", width=45, anchor=tk.CENTER)
         self.tree.column("status", width=55, anchor=tk.CENTER)
@@ -56,11 +66,10 @@ class DimensionPanel(ttk.Frame):
         self.tree.heading("nsfw", text="NSFW")
         self.tree.heading("status", text="状态")
         try:
-            self.tree.tag_configure("nsfw", foreground="#D32F2F", font=("Microsoft YaHei UI", 9, "bold"))
+            self.tree.tag_configure("nsfw", foreground=TOKENS_LIGHT["nsfw"], font=("Microsoft YaHei UI", 9, "bold"))
         except Exception:
             pass
 
-        # 滚动条
         ysb = ttk.Scrollbar(tree_frame, orient=tk.VERTICAL, command=self.tree.yview)
         self.tree.configure(yscrollcommand=ysb.set)
         self.tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
@@ -69,21 +78,45 @@ class DimensionPanel(ttk.Frame):
         self.tree.bind("<Double-1>", self._on_double_click)
         self.tree.bind("<Button-3>", self._on_right_click)
 
-        # 底部按钮
         bottom = ttk.Frame(self)
         bottom.pack(fill=tk.X, padx=4, pady=4)
         ttk.Button(bottom, text="+ 新建条目", command=self._on_add).pack(side=tk.LEFT)
         ttk.Button(bottom, text="刷新", command=self._load_data).pack(side=tk.RIGHT)
 
-        # 右键菜单
         self._context_menu = tk.Menu(self, tearoff=0)
         self._context_menu.add_command(label="编辑", command=self._on_edit)
         self._context_menu.add_command(label="删除", command=self._on_delete)
         self._context_menu.add_separator()
         self._context_menu.add_command(label="启用/禁用切换", command=self._on_toggle_enabled)
 
+    def focus_search(self):
+        try:
+            self._search_entry.focus_set()
+            self._search_entry.select_range(0, tk.END)
+        except Exception:
+            pass
+
+    def _toggle_nsfw_filter(self):
+        self._nsfw_only = not self._nsfw_only
+        self.nsfw_btn.configure(text="NSFW 筛选: 仅NSFW" if self._nsfw_only else "NSFW 筛选: 全部")
+        self._on_search()
+
+    def _on_search_live(self, *_args):
+        # 防抖 250ms
+        if self._search_after:
+            try:
+                self.after_cancel(self._search_after)
+            except Exception:
+                pass
+        self._search_after = self.after(250, self._on_search)
+
+    def _clear_search(self):
+        self.search_var.set("")
+        self._nsfw_only = False
+        self.nsfw_btn.configure(text="NSFW 筛选: 全部")
+        self._load_data()
+
     def _load_data(self):
-        """从数据库加载维度和条目，填充 Treeview。"""
         for item in self.tree.get_children():
             self.tree.delete(item)
         self._module_cache.clear()
@@ -99,6 +132,8 @@ class DimensionPanel(ttk.Frame):
             )
             modules = self.module_repo.get_by_dimension(dim.id)
             for mod in modules:
+                if self._nsfw_only and not mod.is_nsfw:
+                    continue
                 status = "启用" if mod.is_enabled else "禁用"
                 nsfw_mark = "√" if mod.is_nsfw else "×"
                 tags = ("nsfw",) if mod.is_nsfw else ()
@@ -113,16 +148,23 @@ class DimensionPanel(ttk.Frame):
 
     def _on_search(self):
         keyword = self.search_var.get().strip()
-        if not keyword:
+        if not keyword and not self._nsfw_only:
             self._load_data()
             return
-        # 搜索结果：展平显示，归到一个虚拟根节点
         for item in self.tree.get_children():
             self.tree.delete(item)
         self._module_cache.clear()
-        results = self.module_repo.search(keyword)
+        if keyword:
+            results = self.module_repo.search(keyword)
+        else:
+            # 仅 NSFW 筛选：取全部再过滤
+            results = []
+            for dim in self.dimension_repo.get_all():
+                results.extend(self.module_repo.get_by_dimension(dim.id))
+        if self._nsfw_only:
+            results = [m for m in results if m.is_nsfw]
         if not results:
-            self.tree.insert("", tk.END, text="（无匹配结果）", open=True)
+            self.tree.insert("", tk.END, text="（无匹配）", open=True)
             return
         search_node = self.tree.insert(
             "", tk.END, iid="dim_search", text=f"搜索结果（{len(results)} 条）", open=True
@@ -141,14 +183,11 @@ class DimensionPanel(ttk.Frame):
             self._module_cache[mod.id] = mod
 
     def _on_double_click(self, event):
-        """双击条目 → 回调 MainWindow。"""
         sel = self.tree.selection()
         if not sel:
             return
         item_id = sel[0]
-        # 只响应条目节点（非维度节点）
         if item_id.startswith("dim_"):
-            # 维度节点：展开/折叠切换
             return
         module = self._find_module_by_id(item_id)
         if module and module.is_enabled:
@@ -157,11 +196,9 @@ class DimensionPanel(ttk.Frame):
             messagebox.showinfo("提示", "该条目已禁用，无法选中。")
 
     def _on_right_click(self, event):
-        """右键弹出上下文菜单。"""
         iid = self.tree.identify_row(event.y)
         if not iid:
             return
-        # 只对条目节点弹出菜单
         if iid.startswith("dim_"):
             return
         self.tree.selection_set(iid)
@@ -169,11 +206,9 @@ class DimensionPanel(ttk.Frame):
         self._context_menu.post(event.x_root, event.y_root)
 
     def _find_module_by_id(self, module_id: str) -> Optional[Module]:
-        """从缓存中查找模块。"""
         return self._module_cache.get(module_id)
 
     def _on_add(self):
-        """弹出新建条目表单。"""
         dims = self.dimension_repo.get_all()
         if not dims:
             messagebox.showerror("错误", "未找到维度数据，请先初始化。")
@@ -199,7 +234,6 @@ class DimensionPanel(ttk.Frame):
             messagebox.showerror("错误", f"新建失败: {e}")
 
     def _on_edit(self):
-        """编辑选中条目。"""
         sel = self.tree.selection()
         if not sel or sel[0].startswith("dim_"):
             return
@@ -226,7 +260,6 @@ class DimensionPanel(ttk.Frame):
             messagebox.showerror("错误", f"编辑失败: {e}")
 
     def _on_delete(self):
-        """软删除选中条目。"""
         sel = self.tree.selection()
         if not sel or sel[0].startswith("dim_"):
             return
@@ -244,7 +277,6 @@ class DimensionPanel(ttk.Frame):
             messagebox.showerror("错误", f"删除失败: {e}")
 
     def _on_toggle_enabled(self):
-        """切换启用/禁用状态。"""
         sel = self.tree.selection()
         if not sel or sel[0].startswith("dim_"):
             return
@@ -261,7 +293,6 @@ class DimensionPanel(ttk.Frame):
             messagebox.showerror("错误", f"操作失败: {e}")
 
     def reload(self):
-        """供 MainWindow 调用的外部刷新接口。"""
         self._load_data()
 
 
@@ -281,7 +312,6 @@ class ModuleEditDialog:
         f = ttk.Frame(self.top, padding=10)
         f.pack(fill=tk.BOTH, expand=True)
 
-        # 维度选择
         ttk.Label(f, text="所属维度:").grid(row=0, column=0, sticky=tk.W, pady=2)
         dim_keys = [f"{d.name_cn} ({d.key})" for d in dimensions]
         self._dim_map = {f"{d.name_cn} ({d.key})": d.id for d in dimensions}
@@ -297,31 +327,25 @@ class ModuleEditDialog:
         else:
             self.dim_var.set(dim_keys[0])
 
-        # 英文内容
         ttk.Label(f, text="英文提示词:").grid(row=1, column=0, sticky=tk.W, pady=2)
         self.content_var = tk.StringVar(value=module.content_en if module else "")
         ttk.Entry(f, textvariable=self.content_var, width=40).grid(row=1, column=1, pady=2)
 
-        # 中文名
         ttk.Label(f, text="中文显示名:").grid(row=2, column=0, sticky=tk.W, pady=2)
         self.name_var = tk.StringVar(value=module.display_name if module else "")
         ttk.Entry(f, textvariable=self.name_var, width=40).grid(row=2, column=1, pady=2)
 
-        # 权重
         ttk.Label(f, text="权重 (0.5~2.0):").grid(row=3, column=0, sticky=tk.W, pady=2)
         self.weight_var = tk.StringVar(value=f"{module.weight:.1f}" if module else "1.0")
         ttk.Entry(f, textvariable=self.weight_var, width=10).grid(row=3, column=1, sticky=tk.W, pady=2)
 
-        # NSFW
         self.nsfw_var = tk.BooleanVar(value=bool(module.is_nsfw) if module else False)
         ttk.Checkbutton(f, text="NSFW（私密）", variable=self.nsfw_var).grid(row=4, column=0, columnspan=2, sticky=tk.W, pady=2)
 
-        # 备注
         ttk.Label(f, text="备注:").grid(row=5, column=0, sticky=tk.W, pady=2)
         self.notes_var = tk.StringVar(value=module.notes or "" if module else "")
         ttk.Entry(f, textvariable=self.notes_var, width=40).grid(row=5, column=1, pady=2)
 
-        # 按钮
         btn_frame = ttk.Frame(f)
         btn_frame.grid(row=6, column=0, columnspan=2, pady=10)
         ttk.Button(btn_frame, text="确定", command=self._on_ok).pack(side=tk.LEFT, padx=8)

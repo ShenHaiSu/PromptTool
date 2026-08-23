@@ -1,9 +1,10 @@
 """
-主窗口：三栏布局与事件协调（含 P0-01 历史/收藏/模板 + 批量 Card 联动）。
+主窗口：P02 顶部通栏布局 + 三栏 30:38:32 + 快捷键 + 持久化 + 主题切换。
 """
 from __future__ import annotations
 import logging
 import json
+from pathlib import Path
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox, simpledialog
 
@@ -17,29 +18,46 @@ from db.repository import (
     AssemblyRepository, TemplateRepository,
 )
 from ui.dimension_panel import DimensionPanel
-from ui.assembly_panel import AssemblyPanel
-from ui.preview_panel import PreviewPanel
+from ui.assembly_canvas import AssemblyCanvas
+from ui.topbar import TopPreviewBar
+from ui.batch_factory import BatchFactory
 from ui.history_panel import HistoryPanel
-from ui.styles import apply_style
+from ui.styles import apply_style, toggle_theme
+from config import WINDOW_SIZE, WINDOW_MIN_SIZE, LAYOUT_WEIGHTS, PMF_JSON
 from exporter import export_csv
 
 log = logging.getLogger(__name__)
 
 
-class MainWindow(tk.Tk):
-    """主窗口：三栏 PanedWindow 布局 + 事件协调。"""
+def _load_pmf_json() -> dict:
+    try:
+        p = Path(PMF_JSON)
+        if p.exists():
+            return json.loads(p.read_text(encoding="utf-8"))
+    except Exception:
+        pass
+    return {}
 
+
+def _save_pmf_json(data: dict):
+    try:
+        p = Path(PMF_JSON)
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    except Exception as e:
+        log.debug(f"保存 pmf.json 失败: {e}")
+
+
+class MainWindow(tk.Tk):
     def __init__(self, db_path: str, schema_path: str):
         super().__init__()
         self.title("Prompt Modular Factory — 正式版")
-        self.geometry("1400x860")
-        self.minsize(1100, 650)
+        self.geometry(WINDOW_SIZE)
+        self.minsize(*WINDOW_MIN_SIZE)
 
-        # 初始化数据库
         self.db = DatabaseConnection(db_path, schema_path)
         conn = self.db.get_connection()
 
-        # 初始化仓库
         self.repos = {
             "dimension": DimensionRepository(conn),
             "module": ModuleRepository(conn),
@@ -48,19 +66,25 @@ class MainWindow(tk.Tk):
             "template": TemplateRepository(conn),
         }
 
-        # 拼装配置
         self.assembly_config = AssemblyConfig()
         self._current_ir: PromptIR | None = None
         self._current_final: str = ""
+        self._pmf_data = _load_pmf_json()
+        self._theme: str = self._pmf_data.get("theme", "light")
 
-        # 样式
-        self._style_info = apply_style(self)
+        self._style_info = apply_style(self, theme=self._theme)
 
-        # 构建界面
+        # toast 队列
+        self._toast_queue: list[str] = []
+        self._toast_showing: bool = False
+
         self._build_menu()
         self._build_layout()
         self._build_statusbar()
         self._reassemble()
+        self._bind_shortcuts()
+        self._restore_sash_positions()
+        self.protocol("WM_DELETE_WINDOW", self._on_quit)
 
     def _build_menu(self):
         menubar = tk.Menu(self, tearoff=0)
@@ -75,32 +99,64 @@ class MainWindow(tk.Tk):
         edit_menu.add_command(label="新建条目", command=self._on_new_module)
         menubar.add_cascade(label="编辑", menu=edit_menu)
 
+        view_menu = tk.Menu(menubar, tearoff=0)
+        view_menu.add_command(label="浅色主题", command=lambda: self._set_theme("light"))
+        view_menu.add_command(label="深色主题", command=lambda: self._set_theme("dark"))
+        view_menu.add_command(label="切换主题", command=self._toggle_theme)
+        menubar.add_cascade(label="视图", menu=view_menu)
+
         help_menu = tk.Menu(menubar, tearoff=0)
         help_menu.add_command(label="关于", command=self._on_about)
         menubar.add_cascade(label="帮助", menu=help_menu)
 
         self.config(menu=menubar)
 
+    def _set_theme(self, theme: str):
+        if theme == self._theme:
+            return
+        self._theme = theme
+        apply_style(self, theme=self._theme)
+        self._save_pmf_state()
+
+    def _toggle_theme(self):
+        self._theme = toggle_theme(self, self._theme)
+        # 同步 statusbar 按钮文字
+        if hasattr(self, "_theme_btn"):
+            try:
+                self._theme_btn.configure(text="🌙" if self._theme == "light" else "☀")
+            except Exception:
+                pass
+        self._save_pmf_state()
+
     def _build_layout(self):
-        """三栏 PanedWindow 布局：左/中/右（右栏内垂直分割为预览与历史）。"""
-        paned = ttk.PanedWindow(self, orient=tk.HORIZONTAL)
-        paned.pack(fill=tk.BOTH, expand=True)
+        # 顶部通栏
+        self.topbar = TopPreviewBar(
+            self,
+            on_copy=self._on_copy_preview,
+            on_export=self._on_export,
+            mono_font=self._style_info.get("mono", ("Consolas", 11)),
+        )
+        self.topbar.pack(fill=tk.X, padx=8, pady=(8, 4))
+
+        self.paned = ttk.PanedWindow(self, orient=tk.HORIZONTAL)
+        self.paned.pack(fill=tk.BOTH, expand=True, padx=8, pady=4)
 
         self.dim_panel = DimensionPanel(
-            paned, on_module_selected=self._on_module_selected, repos=self.repos
+            self.paned, on_module_selected=self._on_module_selected, repos=self.repos
         )
-        self.assembly_panel = AssemblyPanel(
-            paned,
+        self.canvas = AssemblyCanvas(
+            self.paned,
             on_changed=self._on_assembly_changed,
             config=self.assembly_config,
             on_save=self._on_save_assembly,
             on_save_template=self._on_save_template_menu,
         )
+        # 兼容旧属性名
+        self.assembly_panel = self.canvas
 
-        # 右栏：预览 + 历史/模板 垂直分割
-        right_container = ttk.Frame(paned)
-        self.preview_panel = PreviewPanel(
-            right_container,
+        self.right = ttk.Frame(self.paned)
+        self.batch_factory = BatchFactory(
+            self.right,
             on_random=self._on_random,
             on_export=self._on_export,
             mono_font=self._style_info.get("mono", ("Consolas", 11)),
@@ -108,13 +164,20 @@ class MainWindow(tk.Tk):
             on_batch_favorite=self._on_batch_favorite,
             on_batch_restore=self._on_batch_restore,
         )
-        self.preview_panel.pack(fill=tk.BOTH, expand=True, padx=2, pady=2)
+        # 兼容旧属性：preview_panel 代理到 batch_factory + topbar
+        self.preview_panel = self.batch_factory
+        # 额外兼容：让旧代码 preview_panel.update_preview / warning_label 不报错
+        # TopBar 已有 update_preview；warning 由 badge 承载
+        self.preview_panel.warning_label = self.topbar.badge  # type: ignore
+        # _show_toast 转发到 MainWindow
+        orig_show = self.batch_factory._show_toast  # noqa
+        self.preview_panel._show_toast = self._show_toast  # type: ignore
+        # get_batch_results 已有
 
-        # 分隔线
-        ttk.Separator(right_container, orient=tk.HORIZONTAL).pack(fill=tk.X, pady=4)
-
+        self.batch_factory.pack(fill=tk.BOTH, expand=True, padx=2, pady=2)
+        ttk.Separator(self.right, orient=tk.HORIZONTAL).pack(fill=tk.X, pady=4)
         self.history_panel = HistoryPanel(
-            right_container,
+            self.right,
             assembly_repo=self.repos["assembly"],
             template_repo=self.repos["template"],
             on_restore=self._on_restore,
@@ -123,9 +186,9 @@ class MainWindow(tk.Tk):
         self.history_panel.pack(fill=tk.BOTH, expand=True, padx=2, pady=2)
         self.history_panel.set_create_template_handler(self._on_create_template_from_history)
 
-        paned.add(self.dim_panel, weight=32)
-        paned.add(self.assembly_panel, weight=28)
-        paned.add(right_container, weight=40)
+        self.paned.add(self.dim_panel, weight=LAYOUT_WEIGHTS["left"])
+        self.paned.add(self.canvas, weight=LAYOUT_WEIGHTS["center"])
+        self.paned.add(self.right, weight=LAYOUT_WEIGHTS["right"])
 
     def _build_statusbar(self):
         bar = ttk.Frame(self)
@@ -144,12 +207,16 @@ class MainWindow(tk.Tk):
             text=f"维度: {len(dims)}  |  条目: {total_modules}  |  已选: 0  |  历史: {hist_count}  收藏: {fav_count}  |  模型: SD"
         )
         self.status_label.pack(side=tk.LEFT, padx=8, pady=2)
+        # 主题切换按钮
+        icon = "🌙" if self._theme == "light" else "☀"
+        self._theme_btn = ttk.Button(bar, text=icon, width=4, command=self._toggle_theme)
+        self._theme_btn.pack(side=tk.RIGHT, padx=8)
 
     def _update_statusbar(self):
         dims = self.repos["dimension"].get_all()
         modules_grouped = self.repos["module"].get_all_grouped()
         total_modules = sum(len(v) for v in modules_grouped.values())
-        selected_count = len(self.assembly_panel.selected_items)
+        selected_count = len(self.canvas.selected_items)
         try:
             hist_count = self.repos["assembly"].count_all()
             fav_count = self.repos["assembly"].count_favorites()
@@ -160,9 +227,104 @@ class MainWindow(tk.Tk):
             text=f"维度: {len(dims)}  |  条目: {total_modules}  |  已选: {selected_count}  |  历史: {hist_count}  收藏: {fav_count}  |  模型: SD"
         )
 
+    def _bind_shortcuts(self):
+        self.bind("<Control-f>", lambda e: (self.dim_panel.focus_search(), "break")[1] if hasattr(self.dim_panel, "focus_search") else None)
+        self.bind("<Control-F>", lambda e: (self.dim_panel.focus_search(), "break")[1] if hasattr(self.dim_panel, "focus_search") else None)
+        self.bind("<Control-s>", lambda e: self._on_save_assembly(False))
+        self.bind("<Control-S>", lambda e: self._on_save_assembly(False))
+        self.bind("<Control-c>", lambda e: self._on_copy_preview())
+        self.bind("<Control-C>", lambda e: self._on_copy_preview())
+        self.bind("<Delete>", lambda e: None)
+
+    def _restore_sash_positions(self):
+        sash = self._pmf_data.get("sash")
+        if not sash or not isinstance(sash, list):
+            return
+        try:
+            self.update_idletasks()
+            total = self.paned.winfo_width() or 1400
+            # 存的是比例
+            if all(isinstance(v, float) and 0 < v < 1 for v in sash):
+                pos0 = int(total * sash[0])
+                pos1 = int(total * (sash[0] + sash[1])) if len(sash) > 1 else None
+                if pos0 > 0:
+                    self.paned.sashpos(0, pos0)
+                if pos1 and len(sash) > 1:
+                    self.paned.sashpos(1, pos1)
+            elif all(isinstance(v, int) for v in sash):
+                for i, p in enumerate(sash[:2]):
+                    if p > 0:
+                        self.paned.sashpos(i, p)
+        except Exception:
+            pass
+
+    def _save_pmf_state(self):
+        try:
+            total = self.paned.winfo_width() or 1400
+            ratios: list[float] = []
+            for i in range(2):
+                try:
+                    pos = self.paned.sashpos(i)
+                    ratios.append(pos / total if total else 0.3)
+                except Exception:
+                    ratios.append(0.3)
+            data = dict(self._pmf_data)
+            data["theme"] = self._theme
+            data["geometry"] = self.geometry()
+            data["sash"] = ratios
+            _save_pmf_json(data)
+            self._pmf_data = data
+        except Exception:
+            pass
+
+    def _show_toast(self, msg: str):
+        self._toast_queue.append(msg)
+        if self._toast_showing:
+            return
+        self._dequeue_toast()
+
+    def _dequeue_toast(self):
+        if not self._toast_queue:
+            self._toast_showing = False
+            return
+        self._toast_showing = True
+        msg = self._toast_queue.pop(0)
+        try:
+            from ui.styles import TOKENS_LIGHT, TOKENS_DARK
+            tokens = TOKENS_DARK if self._theme == "dark" else TOKENS_LIGHT
+            bg = tokens["success"]
+        except Exception:
+            bg = "#22C55E"
+        toast = ttk.Label(self, text=f"✓ {msg}", background=bg, foreground="white")
+        try:
+            toast.place(relx=0.5, rely=0.95, anchor=tk.CENTER)
+        except Exception:
+            self._toast_showing = False
+            return
+
+        def _done():
+            try:
+                toast.destroy()
+            except Exception:
+                pass
+            self._dequeue_toast()
+
+        self.after(1500, _done)
+
+    def _on_copy_preview(self, _text: str | None = None):
+        content = _text if _text is not None else self._current_final
+        if not content:
+            self._show_toast("暂无预览内容")
+            return
+        try:
+            self.clipboard_clear()
+            self.clipboard_append(content)
+            self._show_toast("已复制到剪贴板")
+        except Exception:
+            self._show_toast("复制失败")
+
     def _on_module_selected(self, module: Module):
-        """左栏双击 → 中栏添加 → 重新拼装。"""
-        self.assembly_panel.add_module(module)
+        self.canvas.add_module(module)
         try:
             self.repos["module"].increment_usage(module.id)
         except Exception as e:
@@ -171,28 +333,30 @@ class MainWindow(tk.Tk):
         self._update_statusbar()
 
     def _on_assembly_changed(self, items: list[SelectedItem], config: AssemblyConfig):
-        """中栏变化 → 重新拼装。"""
         self.assembly_config = config
         self._reassemble()
         self._update_statusbar()
 
     def _reassemble(self):
-        """调用拼装引擎，更新右栏预览。"""
-        items = self.assembly_panel.selected_items
+        items = self.canvas.selected_items
         ir, final_prompt = assemble(items, self.assembly_config)
         self._current_ir = ir
         self._current_final = final_prompt
-        self.preview_panel.update_preview(ir, final_prompt, ir.warnings)
+        # 同时更新 topbar（兼容 preview_panel shim）
+        try:
+            self.topbar.update(ir, final_prompt, ir.warnings)
+        except Exception:
+            pass
+        # 旧 preview_panel.update_preview 已由 topbar 承载；batch_factory 不需要预览
 
-    # ---- P0-01：保存/收藏/模板 ----
+    # ---- 保存/收藏/模板 ----
 
     def _on_save_assembly(self, is_favorite: bool):
         if not self._current_ir:
             self._reassemble()
-        if not self.assembly_panel.selected_items and not self._current_final:
+        if not self.canvas.selected_items and not self._current_final:
             messagebox.showinfo("提示", "当前无拼装内容，无法保存。")
             return
-        # 标题弹窗（可选）
         title = simpledialog.askstring(
             "保存方案",
             "方案标题（留空自动生成）:",
@@ -209,14 +373,13 @@ class MainWindow(tk.Tk):
                 ir=ir,
                 final_prompt=self._current_final,
                 config=self.assembly_config,
-                items=list(self.assembly_panel.selected_items),
+                items=list(self.canvas.selected_items),
                 is_favorite=is_favorite,
             )
             log.info(f"保存方案: {aid} fav={is_favorite}")
             self.history_panel.refresh()
             self._update_statusbar()
-            self.preview_panel._show_toast("已收藏并保存" if is_favorite else "已保存到历史")
-            # 选中新行（若当前在历史 Tab）
+            self._show_toast("已收藏并保存" if is_favorite else "已保存到历史")
             try:
                 self.history_panel.history_tree.selection_set(aid)
                 self.history_panel.history_tree.focus(aid)
@@ -228,7 +391,6 @@ class MainWindow(tk.Tk):
             messagebox.showerror("错误", f"保存失败: {e}")
 
     def _on_save_template_menu(self):
-        # 弹窗输入名称/描述
         top = tk.Toplevel(self)
         top.title("另存为模板")
         top.transient(self)
@@ -263,7 +425,6 @@ class MainWindow(tk.Tk):
         self._on_create_template(result["name"], result["desc"])
 
     def _on_create_template(self, name: str, desc: str | None):
-        # 收集当前配置与维度开关
         dims = self.repos["dimension"].get_all()
         enabled_keys = [d.key for d in dims if d.is_enabled]
         cover = self._current_final[:200] if self._current_final else None
@@ -277,7 +438,7 @@ class MainWindow(tk.Tk):
             )
             log.info(f"保存模板: {tid} {name}")
             self.history_panel.refresh_templates()
-            self.preview_panel._show_toast(f"模板已保存: {name}")
+            self._show_toast(f"模板已保存: {name}")
         except Exception as e:
             log.error(f"保存模板失败: {e}")
             messagebox.showerror("错误", f"保存模板失败: {e}")
@@ -286,47 +447,51 @@ class MainWindow(tk.Tk):
         self._on_create_template(name, desc)
 
     def _on_restore(self, assembly_id: str):
-        """历史双击一键回填中栏。"""
+        if assembly_id == "_empty":
+            return
+        # 回填确认：当前有已选时需二次确认
+        try:
+            if self.canvas.has_items():
+                # 预加载以拿到数量用于提示
+                tmp_items = self.repos["assembly"].load_selected_items(assembly_id)
+                m = len(tmp_items) if tmp_items else 0
+                n = len(self.canvas.selected_items)
+                if not messagebox.askyesno("回填确认", f"当前已选 {n} 项，将被覆盖为 {m} 项，是否继续？"):
+                    return
+        except Exception:
+            pass
         try:
             items = self.repos["assembly"].load_selected_items(assembly_id)
             if not items:
                 messagebox.showinfo("提示", "该方案无可用条目（可能已被删除）。")
                 return
-            # 检测失效占位
             invalid = sum(1 for it in items if it.module.notes and "已失效" in it.module.notes)
-            self.assembly_panel.set_items(items)
+            self.canvas.set_items(items)
             self._reassemble()
             self._update_statusbar()
             if invalid:
-                self.preview_panel.warning_label.config(
-                    text=f"⚠ {invalid} 项原条目已删除，已用快照占位",
-                    bg="#FFF2CC",
-                )
-                self.preview_panel._show_toast(f"已回填 {len(items)} 项（{invalid} 项已失效）")
+                self._show_toast(f"已回填 {len(items)} 项（{invalid} 项已失效）")
             else:
-                self.preview_panel._show_toast(f"已回填 {len(items)} 项")
+                self._show_toast(f"已回填 {len(items)} 项")
         except Exception as e:
             log.error(f"回填失败: {e}")
             messagebox.showerror("错误", f"回填失败: {e}")
 
     def _on_template_apply(self, template_id: str):
+        if template_id == "_empty":
+            return
         try:
             config, enabled_keys = self.repos["template"].apply(template_id)
-            # 回写中栏配置
             self.assembly_config = config
-            self.assembly_panel.apply_config(config)
-            # 可选：若模板记录了 enabled_keys，可同步更新维度开关（本期仅配置，不改 DB 维度启用状态，避免副作用）
-            # 保留 enabled_keys 仅作提示
+            self.canvas.apply_config(config)
             if enabled_keys:
                 log.info(f"应用模板 {template_id}: enabled_keys={enabled_keys}")
             self._reassemble()
             self._update_statusbar()
-            self.preview_panel._show_toast("已应用模板")
+            self._show_toast("已应用模板")
         except Exception as e:
             log.error(f"应用模板失败: {e}")
             messagebox.showerror("错误", f"应用模板失败: {e}")
-
-    # ---- 批量 Card 回调 ----
 
     def _on_batch_favorite(self, ir: PromptIR, final_prompt: str):
         try:
@@ -338,13 +503,16 @@ class MainWindow(tk.Tk):
             )
             self.history_panel.refresh()
             self._update_statusbar()
-            self.preview_panel._show_toast("已收藏")
+            self._show_toast("已收藏")
         except Exception as e:
             log.error(f"批量收藏失败: {e}")
-            self.preview_panel._show_toast(f"收藏失败: {e}")
+            self._show_toast(f"收藏失败: {e}")
 
     def _on_batch_restore(self, ir: PromptIR):
-        """将单条 IR 回填到中栏：按 ir.segments 反推 Module（尽量关联真实 module）。"""
+        # 回填确认
+        if self.canvas.has_items():
+            if not messagebox.askyesno("回填确认", f"当前已选 {len(self.canvas.selected_items)} 项，将被覆盖为 {len(ir.segments)} 段，是否继续？"):
+                return
         items: list[SelectedItem] = []
         for seg in ir.segments:
             mod = None
@@ -353,7 +521,6 @@ class MainWindow(tk.Tk):
             except Exception:
                 mod = None
             if mod is None:
-                # 快照占位
                 mod = Module(
                     id=seg.source_module_id,
                     dimension_id="",
@@ -368,25 +535,23 @@ class MainWindow(tk.Tk):
                 items.append(SelectedItem(module=mod, weight_override=w, locked=False))
             else:
                 w = None if seg.weight == mod.weight else seg.weight
-                # 若 weight 与 ir 不一致则用 ir 权重覆盖
                 if seg.weight != mod.weight:
                     w = seg.weight if seg.weight != 1.0 else None
                 items.append(SelectedItem(module=mod, weight_override=w, locked=False))
-        self.assembly_panel.set_items(items)
+        self.canvas.set_items(items)
         self._reassemble()
         self._update_statusbar()
-        self.preview_panel._show_toast(f"已回填批量结果（{len(items)} 段）")
+        self._show_toast(f"已回填批量结果（{len(items)} 段）")
 
     def _on_random(self, count: int, allow_nsfw: bool = False, use_partial: bool = True):
-        """随机生成。"""
         try:
             dimensions = self.repos["dimension"].get_all()
             modules_by_dim = self.repos["module"].get_all_grouped()
             if use_partial:
-                anchored = list(self.assembly_panel.selected_items)
+                anchored = list(self.canvas.selected_items)
                 if not anchored:
                     try:
-                        self.preview_panel._show_toast("未选择锚点，已按全随机生成")
+                        self._show_toast("未选择锚点，已按全随机生成")
                     except Exception:
                         pass
                     results = random_assembly(
@@ -399,12 +564,12 @@ class MainWindow(tk.Tk):
                         self.assembly_config, allow_nsfw=allow_nsfw,
                     )
             else:
-                locked_ids = self.assembly_panel.get_locked_module_ids()
+                locked_ids = self.canvas.get_locked_module_ids()
                 results = random_assembly(
                     dimensions, modules_by_dim, locked_ids, count,
                     self.assembly_config, allow_nsfw=allow_nsfw,
                 )
-            self.preview_panel.update_batch(results)
+            self.batch_factory.update_batch(results)
             mode = "可控部分随机" if use_partial else "全随机"
             log.info(f"随机生成 {len(results)} 条（请求 {count}，模式={mode}，NSFW={'开' if allow_nsfw else '关'}）")
         except Exception as e:
@@ -412,8 +577,7 @@ class MainWindow(tk.Tk):
             messagebox.showerror("错误", f"随机生成失败: {e}")
 
     def _on_export(self):
-        """导出 CSV。"""
-        results = self.preview_panel.get_batch_results()
+        results = self.batch_factory.get_batch_results()
         if not results:
             messagebox.showinfo("提示", "批量结果为空，请先随机生成。")
             return
@@ -438,13 +602,19 @@ class MainWindow(tk.Tk):
             "提示词模块化工厂\n"
             "技术栈: Python + tkinter + sqlite3\n"
             "含 P0-01 历史/收藏/一键复用 + 批量 Card 流\n"
-            "版本: V1.2 · 2026-08-23"
+            "版本: V2.0 TopBar · 2026-08-23"
         )
 
     def _on_new_module(self):
-        """菜单：新建条目 → 委托给左栏面板。"""
         self.dim_panel._on_add()
 
     def _on_quit(self):
-        self.db.close()
+        try:
+            self._save_pmf_state()
+        except Exception:
+            pass
+        try:
+            self.db.close()
+        except Exception:
+            pass
         self.destroy()
