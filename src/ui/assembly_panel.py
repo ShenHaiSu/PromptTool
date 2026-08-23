@@ -15,10 +15,19 @@ from engine.models import SelectedItem, Module, AssemblyConfig
 class AssemblyPanel(ttk.Frame):
     """中栏面板：已选拼装条目列表 + 控件。"""
 
-    def __init__(self, parent, on_changed: Callable, config: AssemblyConfig):
+    def __init__(
+        self,
+        parent,
+        on_changed: Callable,
+        config: AssemblyConfig,
+        on_save: Callable[[bool], None] | None = None,
+        on_save_template: Callable | None = None,
+    ):
         super().__init__(parent)
         self.on_changed = on_changed    # 拼装变化回调
         self.assembly_config = config     # AssemblyConfig 引用
+        self.on_save = on_save            # 保存回调 (is_favorite) -> None
+        self.on_save_template = on_save_template
         self.selected_items: list[SelectedItem] = []
         self._build_ui()
 
@@ -90,6 +99,44 @@ class AssemblyPanel(ttk.Frame):
         )
         sort_combo.pack(side=tk.LEFT, padx=4)
         sort_combo.bind("<<ComboboxSelected>>", lambda e: self._on_config_change())
+
+        # 保存/收藏/模板 行（P0-01）
+        save_frame = ttk.Frame(self)
+        save_frame.pack(fill=tk.X, padx=4, pady=(8, 4))
+        ttk.Button(save_frame, text="保存方案", command=lambda: self._on_save_click(False)).pack(side=tk.LEFT, padx=2)
+        ttk.Button(save_frame, text="★ 收藏并保存", command=lambda: self._on_save_click(True)).pack(side=tk.LEFT, padx=2)
+        ttk.Button(save_frame, text="另存为模板", command=self._on_save_template_click).pack(side=tk.RIGHT, padx=2)
+
+    def _on_save_click(self, is_favorite: bool):
+        if self.on_save:
+            self.on_save(is_favorite)
+
+    def _on_save_template_click(self):
+        if self.on_save_template:
+            self.on_save_template()
+
+    # ---- P0-01 一键复用 API ----
+
+    def get_items(self) -> list[SelectedItem]:
+        return list(self.selected_items)
+
+    def set_items(self, items: list[SelectedItem]):
+        """清空后批量回填（历史一键复用），并触发拼装刷新。"""
+        self.selected_items = list(items)
+        self._refresh_listbox()
+        self._notify_changed()
+
+    def apply_config(self, config: AssemblyConfig):
+        """应用模板配置：回写控件并更新 assembly_config。"""
+        self.assembly_config.separator = config.separator
+        self.assembly_config.use_weight_brackets = config.use_weight_brackets
+        self.assembly_config.model_profile = config.model_profile
+        self.assembly_config.sort_by = config.sort_by
+        # 同步控件
+        self.sep_var.set(config.separator)
+        self.bracket_var.set(config.use_weight_brackets)
+        self.sort_var.set(config.sort_by)
+        self._notify_changed()
 
     def add_module(self, module: Module):
         """从左栏添加条目到中栏。"""
