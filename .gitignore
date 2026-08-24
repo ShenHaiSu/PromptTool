@@ -41,3 +41,24 @@ Thumbs.db
 # OS
 .DS_Store
 .reasonix/
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.pytest_cache/
+.coverage
+htmlcov/
+.mypy_cache/
+.ruff_cache/
+.venv/
+venv/
+env/
+*.egg-info/
+
+# Local runtime data (SQLite DB + window geometry cache)
+data/
+*.db
+*.sqlite
+*.sqlite3
