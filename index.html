@@ -3,8 +3,18 @@
   <head>
     <meta charset="UTF-8" />
     <link rel="icon" type="image/svg+xml" href="/vite.svg" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, minimum-scale=1" />
     <title>Prompt Modular Factory — Tauri</title>
+    <!-- 主题 FOUC 防闪：首屏即应用本地持久化主题 -->
+    <script>
+      try {
+        var t = localStorage.getItem('pmf:theme') || localStorage.getItem('pmf-theme');
+        var dark = t ? t === 'dark' : window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
+        if (dark) { document.documentElement.classList.add('dark'); document.documentElement.style.colorScheme = 'dark'; }
+        else { document.documentElement.style.colorScheme = 'light'; }
+      } catch (e) {}
+    </script>
+    <style>html,body{margin:0;min-width:1280px;min-height:720px}</style>
   </head>
   <body>
     <div id="app"></div>
