@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "tauri-app",
+  "productName": "Prompt Modular Factory",
   "version": "0.1.0",
-  "identifier": "com.administrator.tauri-app",
+  "identifier": "com.pmf.tauri-app",
   "build": {
     "beforeDevCommand": "bun run dev",
     "devUrl": "http://localhost:1420",
@@ -12,9 +12,12 @@
   "app": {
     "windows": [
       {
-        "title": "tauri-app",
-        "width": 800,
-        "height": 600
+        "title": "Prompt Modular Factory — Tauri",
+        "width": 1600,
+        "height": 1080,
+        "minWidth": 1280,
+        "minHeight": 720,
+        "resizable": true
       }
     ],
     "security": {
@@ -30,6 +33,7 @@
       "icons/128x128@2x.png",
       "icons/icon.icns",
       "icons/icon.ico"
-    ]
+    ],
+    "resources": ["resources/schema.sql"]
   }
 }
