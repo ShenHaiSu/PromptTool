@@ -1,0 +1,24 @@
+# Changelog
+
+## v3.0-tauri — 2026-08-24 · Tauri 重构交付（阶段六）
+
+### 系统集成与交付（P3 阶段六）
+
+- **快捷键** `useShortcuts`：`Ctrl+F` 聚焦搜索（`dimension-search`）、`Ctrl+S` 保存方案（`history.save` + Toast）、`Ctrl+C` 复制最终 Prompt（含 `textarea execCommand` 回退）、`Delete/Backspace` 移除末项；输入框内不劫持，避免误触
+- **主题持久化**：`pmf:theme/pmf-theme` 双写 + `stores/theme` `getStoredTheme()/applyTheme()` + `index.html` 首屏 `<script>` 注入 `localStorage` + `prefers-color-scheme` 回退，消除 FOUC；`StatusBar` 抽离为 `StatusBar.vue`
+- **sash/几何持久化**：`useSash` 已双写 `pmf:sash/pmf-sash`（`12%~65%` + `left+center<0.92` 约束）；新增 `usePersist.persistGeometry()` 监听 `beforeunload` 双写 `pmf:geometry/pmf-geometry` 并 `768p` 溢出保护 + 可选 `invoke('save_window_state')`；`App.vue` 挂载时调用
+- **Toast 队列**：`useToast` 补 `MAX_TOASTS=5` 溢出丢弃最旧 + `clear()`，`App.vue` 仅渲染 `slice(-5)`，`error` 红边
+- **CSV 导出** `lib/export.ts`：对标 `exporter.py` 列 `序号/提示词/维度构成/冲突警告`，`UTF-8 BOM` + RFC4180 双引号转义；`TopBar` / `BatchFactory` 复用，批量 `exportBatchCsv(results)` 单条 `exportSingleCsv(ir,final)`
+- **一键复制全部**：`BatchFactory onCopyAll` 保留（`navigator.clipboard.writeText` + Toast）
+- **溢出保护(768p)**：`index.html` `min-width 1280 min-height 720` + `App.vue` `flex min-h-0 overflow-hidden` + 几何持久化阈值校验
+- **全局错误处理** `main.ts`：`app.config.errorHandler` + `window error/unhandledrejection` 日志 + Toast 兜底展示
+- **打包定版**：`package.json / src-tauri/tauri.conf.json / Cargo.toml` 版本 `0.1.0 → 3.0.0`，`tauri.conf.json` `productName Prompt Modular Factory` `width 1600×1080 min 1280×720 resizable resources schema.sql` 已就绪；`cargo check / build / vitest` 全绿可用 `bun run tauri build` 产出 `msi/exe`（`bundle.targets all`）
+- **文档定版**：`README` 更新快速开始 `bun install && bun run tauri dev` + 依赖/DB/核心能力/阶段六集成说明；本 CHANGELOG 新增
+
+### 前置阶段（阶段一～五回顾）
+
+- **P1-01 工程基座**：`Vite + Vue 3 + TS + Tailwind + shadcn-vue + Pinia + Vitest` + `tokens.css` 设计 Token + `tauri.conf` 产品化
+- **P1-02 核心领域**：`engine/models/assembly/rules/adapters/random` TS 1:1 + `rusqlite WAL` 7 表 + 种子 + `lib/db.ts` invoke + 60+ 单测
+- **P2-01 主布局**：`App.vue 30:38:32 Flex + useSash rAF` + `TopBar 88/168` + `DimensionPanel` 搜索/NSFW + `StatusBar` + 双键持久化
+- **P2-02 画布/批量**：`AssemblyCanvas` Chips DnD + 权重 Popover 本地 draft + `BatchFactory` 虚拟化 `h-400/110/5` + `BatchCard` 复制/收藏/回填
+- **P2-03 资产沉淀**：`HistoryPanel Tabs 历史/收藏/模板` + `history` store 全链路 + `SaveDialog` + 已删占位 `[已失效]` + 回填确认
