@@ -1,6 +1,6 @@
 [package]
 name = "tauri-app"
-version = "0.1.0"
+version = "3.0.0"
 description = "Prompt Modular Factory — Tauri + Vue + Rust"
 authors = ["you"]
 edition = "2021"
