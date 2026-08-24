@@ -4,29 +4,32 @@ import TopBar from '@/components/TopBar.vue'
 import DimensionPanel from '@/components/DimensionPanel.vue'
 import BatchFactory from '@/components/BatchFactory.vue'
 import HistoryPanel from '@/components/HistoryPanel.vue'
-import { Button } from '@/components/ui/button'
+import StatusBar from '@/components/StatusBar.vue'
 import AssemblyCanvas from '@/components/AssemblyCanvas.vue'
 import { useAssemblyStore } from '@/stores/assembly'
 import { useHistoryStore } from '@/stores/history'
-import { useThemeStore } from '@/stores/theme'
 import { useSash } from '@/composables/useSash'
 import { appToasts, useToast } from '@/composables/useToast'
+import { useShortcuts } from '@/composables/useShortcuts'
+import { useThemeStore } from '@/stores/theme'
 import { dbGetDimensions, dbGetAllModulesGrouped } from '@/lib/db'
 
 const assembly = useAssemblyStore()
 const historyStore = useHistoryStore()
-const theme = useThemeStore()
+const themeStore = useThemeStore()
+void themeStore.mode // 触发 theme 初始化副作用（已在 store 构造时 applyTheme）
 const { leftFrac, centerFrac, setFracs } = useSash()
 const { push } = useToast()
 
-// Ctrl+S 快捷键：保存当前画布（阶段五新增）
-function onGlobalKeydown(e: KeyboardEvent): void {
-  const isSave = (e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's'
-  if (!isSave) return
-  // 若焦点在输入框内，不劫持
-  const tag = (e.target as HTMLElement)?.tagName
-  if (tag === 'INPUT' || tag === 'TEXTAREA' || (e.target as HTMLElement)?.isContentEditable) return
-  e.preventDefault()
+// ------------------------------------------------------------------
+// 快捷键：Ctrl+F 聚焦搜索 / Ctrl+S 保存 / Ctrl+C 复制 / Delete 删除末项
+// ------------------------------------------------------------------
+function focusSearch(): void {
+  const el = document.querySelector<HTMLInputElement>('[data-testid="dimension-search"]')
+  el?.focus()
+  el?.select()
+}
+function doSaveShortcut(): void {
   if (!assembly.finalPrompt && assembly.selectedItems.length === 0) {
     push('空方案暂不保存 — 请先添加词条', 'warning')
     return
@@ -36,8 +39,30 @@ function onGlobalKeydown(e: KeyboardEvent): void {
     .then(() => push('已保存方案（Ctrl+S）', 'success', 1500))
     .catch((err) => push(`保存失败: ${String(err)}`, 'error'))
 }
+async function doCopyShortcut(): Promise<void> {
+  const text = assembly.finalPrompt
+  if (!text) { push('暂无可复制的 Prompt', 'warning'); return }
+  try {
+    await navigator.clipboard.writeText(text)
+    push('已复制到剪贴板（Ctrl+C）', 'success', 1500)
+  } catch {
+    const ta = document.createElement('textarea')
+    ta.value = text; ta.style.position = 'fixed'; ta.style.opacity = '0'
+    document.body.appendChild(ta); ta.select()
+    document.execCommand('copy'); document.body.removeChild(ta)
+    push('已复制到剪贴板（Ctrl+C）', 'success', 1500)
+  }
+}
+function doRemoveShortcut(): void {
+  const last = assembly.selectedItems[assembly.selectedItems.length - 1]
+  if (!last) return
+  assembly.removeModule(last.module.id)
+  push(`已移除 ${last.module.displayName}`, 'info', 1200)
+}
 
-// Stats for StatusBar
+useShortcuts({ focusSearch, save: doSaveShortcut, copy: doCopyShortcut, remove: doRemoveShortcut })
+
+// Stats for StatusBar — best effort, jsdom 无 Tauri 时回退 14/311
 const dimCount = ref(0)
 const moduleCount = ref(0)
 
@@ -62,7 +87,6 @@ function onSashPointerDown(e: PointerEvent, which: 'left' | 'right'): void {
   ;(e.currentTarget as HTMLElement).setPointerCapture(e.pointerId)
   window.addEventListener('pointermove', onPointerMove)
   window.addEventListener('pointerup', onPointerUp)
-  // prevent text selection during drag
   document.body.style.userSelect = 'none'
   document.body.style.cursor = 'col-resize'
 }
@@ -96,8 +120,12 @@ function onPointerUp(e: PointerEvent): void {
 }
 
 onMounted(async () => {
-  window.addEventListener('keydown', onGlobalKeydown)
-  // Fetch stats — failures (e.g. jsdom without Tauri) are tolerated for layout验收
+  // 持久化几何：768p 溢出保护 + localStorage 双写（Rust save_window_state 可选）
+  try {
+    const { persistGeometry } = await import('@/composables/usePersist')
+    persistGeometry()
+  } catch { /* ignore */ }
+
   try {
     const dims = await dbGetDimensions()
     dimCount.value = dims.length
@@ -105,38 +133,27 @@ onMounted(async () => {
       const grouped = await dbGetAllModulesGrouped()
       let total = 0
       for (const v of Object.values(grouped)) total += (v as unknown[]).length
-      // 若 grouped 为空（非 Tauri 环境），保持 0，不影响渲染
-      if (total === 0) {
-        // fallback：尝试逐维度统计已在 DimensionPanel 中，此处不强求
-      }
       moduleCount.value = total
     } catch { /* ignore in jsdom */ }
   } catch { /* ignore */ }
-
-  // History counts — best effort
   try { await historyStore.fetchAll() } catch { /* ignore */ }
 })
 
 onBeforeUnmount(() => {
-  window.removeEventListener('keydown', onGlobalKeydown)
+  // beforeunload 已由 usePersist 托管
 })
-
-
 </script>
 
 <template>
   <div class="flex h-screen flex-col overflow-hidden bg-background text-foreground">
-    <!-- TopBar 88/168 -->
     <TopBar :prompt="assembly.finalPrompt" :warnings="assembly.warnings" :ir="assembly.ir" />
 
-    <!-- 三栏主体 30:38:32 resizable -->
     <div
       ref="layoutRef"
       data-testid="main-layout"
       class="flex min-h-0 flex-1 overflow-hidden"
       :style="{ contain: 'layout paint' }"
     >
-      <!-- Left 30% -->
       <section
         data-testid="panel-left"
         class="flex min-h-0 shrink-0 flex-col overflow-hidden border-r bg-card"
@@ -149,7 +166,6 @@ onBeforeUnmount(() => {
         <DimensionPanel />
       </section>
 
-      <!-- Sash left -->
       <div
         data-testid="sash-left"
         class="flex w-2 shrink-0 items-center justify-center bg-border hover:bg-primary/20 cursor-col-resize select-none"
@@ -160,7 +176,6 @@ onBeforeUnmount(() => {
         <div class="h-8 w-0.5 rounded bg-muted-foreground/30" />
       </div>
 
-      <!-- Center 38% — AssemblyCanvas -->
       <section
         data-testid="panel-center"
         class="flex min-h-0 shrink-0 flex-col overflow-hidden bg-background"
@@ -169,7 +184,6 @@ onBeforeUnmount(() => {
         <AssemblyCanvas />
       </section>
 
-      <!-- Sash right -->
       <div
         data-testid="sash-right"
         class="flex w-2 shrink-0 items-center justify-center bg-border hover:bg-primary/20 cursor-col-resize select-none"
@@ -180,7 +194,6 @@ onBeforeUnmount(() => {
         <div class="h-8 w-0.5 rounded bg-muted-foreground/30" />
       </div>
 
-      <!-- Right 32% — Batch + History -->
       <section
         data-testid="panel-right"
         class="flex min-h-0 flex-1 flex-col overflow-hidden bg-card"
@@ -190,40 +203,16 @@ onBeforeUnmount(() => {
       </section>
     </div>
 
-    <!-- StatusBar 22px -->
-    <footer
-      data-testid="status-bar"
-      class="flex h-7 shrink-0 items-center justify-between border-t bg-muted px-3 text-xs text-muted-foreground"
-    >
-      <div class="flex items-center gap-3">
-        <span data-testid="status-dimensions">维度: {{ dimCount || 14 }}</span>
-        <span data-testid="status-modules">条目: {{ moduleCount || 311 }}</span>
-        <span data-testid="status-selected">已选: {{ assembly.selectedItems.length }}</span>
-        <span data-testid="status-history">历史: {{ historyStore.recent.length }}</span>
-        <span data-testid="status-favorites">收藏: {{ historyStore.favorites.length }}</span>
-        <span data-testid="status-model" class="rounded bg-background px-1.5 py-0.5 font-mono">{{ assembly.config.modelProfile.toUpperCase() }}</span>
-      </div>
-      <div class="flex items-center gap-2">
-        <span class="hidden sm:inline">就绪 · Tauri P3</span>
-        <Button
-          data-testid="theme-toggle"
-          variant="ghost"
-          size="sm"
-          class="h-6 px-2 text-xs"
-          @click="theme.toggle()"
-        >
-          {{ theme.mode === 'light' ? '🌙 深色' : '☀️ 浅色' }}
-        </Button>
-      </div>
-    </footer>
+    <StatusBar :dim-count="dimCount" :module-count="moduleCount" />
 
-    <!-- Toasts -->
+    <!-- Toast 队列：最多 5 条并发，溢出丢弃最旧 -->
     <div data-testid="toasts" class="pointer-events-none fixed bottom-10 right-4 z-50 flex flex-col gap-2">
       <div
-        v-for="t in appToasts"
+        v-for="t in appToasts.slice(-5)"
         :key="t.id"
+        :data-testid="`toast-${t.id}`"
         class="pointer-events-auto rounded-md border bg-card px-3 py-2 text-sm shadow-lg"
-        :class="t.type === 'success' ? 'border-green-500/30 bg-green-50 dark:bg-green-950' : t.type === 'warning' ? 'border-amber-500/30 bg-amber-50 dark:bg-amber-950' : ''"
+        :class="t.type === 'success' ? 'border-green-500/30 bg-green-50 dark:bg-green-950' : t.type === 'warning' ? 'border-amber-500/30 bg-amber-50 dark:bg-amber-950' : t.type === 'error' ? 'border-red-500/30 bg-red-50 dark:bg-red-950' : ''"
       >
         {{ t.message }}
       </div>
