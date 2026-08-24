@@ -5,6 +5,7 @@ import BatchCard from '@/components/BatchCard.vue'
 import { useBatchStore } from '@/stores/batch'
 import { useAssemblyStore } from '@/stores/assembly'
 import { useToast } from '@/composables/useToast'
+import { exportBatchCsv } from '@/lib/export'
 import { useVirtualizer } from '@tanstack/vue-virtual'
 import { dbGetDimensions, dbGetAllModulesGrouped } from '@/lib/db'
 import type { Dimension, Module } from '@/engine/models'
@@ -92,17 +93,8 @@ function onExportCsv(): void {
     push('暂无可导出内容', 'warning')
     return
   }
-  const esc = (s: string) => `"${s.replace(/"/g, '""')}"`
-  const header = 'index,prompt,warnings,dimKeys,hash\n'
-  const rows = batch.results.map((r) => [String(r.index), esc(r.finalPrompt), esc(r.warnings.join('; ')), esc(r.dimKeys.join(';')), r.hash].join(',')).join('\n')
-  const csv = '\uFEFF' + header + rows + '\n'
-  const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' })
-  const url = URL.createObjectURL(blob)
-  const a = document.createElement('a')
-  a.href = url
-  a.download = `pmf-batch-${Date.now()}.csv`
-  a.click()
-  URL.revokeObjectURL(url)
+  // 阶段六：复用 export.ts 对标 exporter.py 的 列 序号/提示词/维度构成/冲突警告
+  exportBatchCsv(batch.results as unknown as Array<{ finalPrompt: string; warnings: string[]; ir: import('@/engine/models').PromptIR }>)
   push('已导出 CSV', 'success', 1500)
 }
 

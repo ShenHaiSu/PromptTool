@@ -3,6 +3,7 @@ import { ref, computed } from 'vue'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { useToast } from '@/composables/useToast'
+import { exportSingleCsv } from '@/lib/export'
 import type { PromptIR } from '@/engine/models'
 
 const props = withDefaults(defineProps<{
@@ -67,20 +68,18 @@ async function onCopy(): Promise<void> {
 }
 
 function onExport(): void {
-  const text = props.prompt ?? ''
-  if (!text) {
+  if (!props.prompt) {
     push('暂无可导出的 Prompt', 'warning')
     return
   }
-  // 阶段三占位：前端 CSV 导出；阶段六接 Rust db_export_csv
-  const csv = '\uFEFFprompt,warnings\n' + `"${text.replace(/"/g, '""')}","${(props.warnings ?? []).join('; ').replace(/"/g, '""')}"\n`
-  const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' })
-  const url = URL.createObjectURL(blob)
-  const a = document.createElement('a')
-  a.href = url
-  a.download = `pmf-prompt-${Date.now()}.csv`
-  a.click()
-  URL.revokeObjectURL(url)
+  if (!props.ir) {
+    // 无 IR 时回退极简导出（仅 prompt 列）
+    const fakeIr = { segments: [{ dimensionKey: '', text: props.prompt, weight: 1, sourceModuleId: '' }], warnings: props.warnings ?? [] } as PromptIR
+    exportSingleCsv(fakeIr, props.prompt)
+    push('已导出 CSV', 'success', 1500)
+    return
+  }
+  exportSingleCsv(props.ir, props.prompt)
   push('已导出 CSV', 'success', 1500)
 }
 
