@@ -1,6 +1,9 @@
 /**
  * Rust Command invoke 封装 — 对应 Python repository.py
- * 参数名须与 Rust 函数形参 snake_case 一致；DTO 字段为 camelCase（serde rename_all）
+ * 注意：Tauri v2 的 #[tauri::command] 默认将参数名转为 camelCase，
+ * 因此 invoke 键名须与 Rust 形参的 camelCase 形式一致（ir_json → irJson），
+ * 而非直接使用 snake_case 形参名；DTO 字段为 camelCase（serde rename_all）。
+ * 踩坑记录见 docs/pitfalls/01-invoke-arg-case.md
  */
 import { invoke } from '@tauri-apps/api/core'
 import type {
@@ -151,7 +154,7 @@ export async function dbGetDimensions(): Promise<Dimension[]> {
 }
 
 export async function dbGetModulesByDimension(dimId: string): Promise<Module[]> {
-  const rows = await invoke<ModuleDto[]>('db_get_modules_by_dimension', { dim_id: dimId })
+  const rows = await invoke<ModuleDto[]>('db_get_modules_by_dimension', { dimId })
   return rows.map(toModule)
 }
 
@@ -174,9 +177,9 @@ export async function dbCreateModule(
   weight = 1.0,
 ): Promise<Module> {
   const m = await invoke<ModuleDto>('db_create_module', {
-    dim_id: dimId,
-    content_en: contentEn,
-    display_name: displayName,
+    dimId,
+    contentEn,
+    displayName,
     weight,
   })
   return toModule(m)
@@ -203,15 +206,15 @@ export async function dbSaveAssembly(
 ): Promise<string> {
   return invoke<string>('db_save_assembly', {
     title,
-    ir_json: irJson,
-    final_prompt: finalPrompt,
+    irJson,
+    finalPrompt,
     config: toConfigDto(config),
     items: items.map((it) => ({
       module: toModuleDto(it.module),
       weightOverride: it.weightOverride ?? null,
       locked: it.locked,
     })),
-    is_favorite: isFavorite,
+    isFavorite,
   })
 }
 
@@ -222,10 +225,10 @@ export async function dbSaveAssemblyFromIr(
   isFavorite = false,
 ): Promise<string> {
   return invoke<string>('db_save_assembly_from_ir', {
-    ir_json: irJson,
-    final_prompt: finalPrompt,
+    irJson,
+    finalPrompt,
     config: toConfigDto(config),
-    is_favorite: isFavorite,
+    isFavorite,
   })
 }
 
@@ -245,13 +248,13 @@ export async function dbSearchAssemblies(keyword: string): Promise<Assembly[]> {
 }
 
 export async function dbGetAssemblyItems(assemblyId: string): Promise<AssemblyItemRow[]> {
-  return invoke<AssemblyItemRow[]>('db_get_assembly_items', { assembly_id: assemblyId })
+  return invoke<AssemblyItemRow[]>('db_get_assembly_items', { assemblyId })
 }
 
 export async function dbLoadSelectedItems(assemblyId: string): Promise<SelectedItem[]> {
   const rows = await invoke<
     { module: ModuleDto; weightOverride: number | null; locked: boolean }[]
-  >('db_load_selected_items', { assembly_id: assemblyId })
+  >('db_load_selected_items', { assemblyId })
   return rows.map((r) => ({
     module: toModule(r.module),
     weightOverride: r.weightOverride,
@@ -285,7 +288,7 @@ export async function dbSaveTemplate(
     name,
     desc,
     config: toConfigDto(config),
-    enabled_keys: enabledKeys,
+    enabledKeys,
     cover,
   })
 }
@@ -325,7 +328,7 @@ export async function dbSoftDeleteTemplate(id: string): Promise<void> {
 // Utils
 // ------------------------------------------------------------------
 export async function dbExportCsv(path: string, resultsJson: string): Promise<void> {
-  await invoke('db_export_csv', { path, results_json: resultsJson })
+  await invoke('db_export_csv', { path, resultsJson })
 }
 
 export type ImportReport = {
@@ -337,7 +340,7 @@ export type ImportReport = {
 }
 
 export async function dbImportLegacyDb(legacyPath: string): Promise<ImportReport> {
-  return invoke<ImportReport>('db_import_legacy_db', { legacy_path: legacyPath })
+  return invoke<ImportReport>('db_import_legacy_db', { legacyPath })
 }
 
 // ------------------------------------------------------------------

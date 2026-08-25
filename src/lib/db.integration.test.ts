@@ -1,6 +1,6 @@
 /**
  * 前端 db.ts 的 invoke 映射单测（mock）。
- * 确保前端封装与 Rust command 参数命名一致。
+ * 确保前端封装与 Rust command 参数命名一致（Tauri v2 默认 camelCase）。
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
@@ -46,9 +46,9 @@ describe('lib/db invoke mapping', () => {
     expect(id).toBe('new-id')
     const payload = mockInvoke.mock.calls[0]![1] as Record<string, unknown>
     expect(mockInvoke.mock.calls[0]![0]).toBe('db_save_assembly')
-    expect(payload).toHaveProperty('ir_json')
-    expect(payload).toHaveProperty('final_prompt')
-    expect(payload).toHaveProperty('is_favorite')
+    expect(payload).toHaveProperty('irJson')
+    expect(payload).toHaveProperty('finalPrompt')
+    expect(payload).toHaveProperty('isFavorite')
     const cfgArg = payload['config'] as Record<string, unknown>
     expect(cfgArg).toBeDefined()
   })
@@ -66,7 +66,7 @@ describe('lib/db invoke mapping', () => {
     expect(mockInvoke).toHaveBeenCalledWith('db_export_library', { path: 'C:/tmp/pmf-library.json' })
   })
 
-  it('dbImportLibrary passes path and mode (snake_case params)', async () => {
+  it('dbImportLibrary passes path and mode (camelCase keys)', async () => {
     const report = { dimensionsCreated: 1, dimensionsUpdated: 0, dimensionsSkipped: 0, modulesCreated: 2, modulesUpdated: 0, modulesSkipped: 0, rulesCreated: 0, rulesUpdated: 0, rulesSkipped: 0, tagsCreated: 0, tagsSkipped: 0, errors: [] }
     mockInvoke.mockResolvedValueOnce(report)
     const r = await dbImportLibrary('C:/tmp/in.json', 'skip')
