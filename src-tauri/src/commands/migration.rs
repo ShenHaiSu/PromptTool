@@ -86,12 +86,32 @@ const TARGET_ORDER: &[(&str, i64)] = &[
 // Public: init_db — called from setup
 // ------------------------------------------------------------------
 
+/// 数据库文件所在目录 = exe_dir/data/
+pub fn data_dir_for(_app: &AppHandle) -> Result<PathBuf, String> {
+    // 不能使用 app.path().executable_dir()：Tauri v2 在 Windows 上该 API 直接报
+    // Err(Not supported)（底层 dirs::executable_dir() 在 win.rs 中恒为 None），
+    // 导致 init_db 静默失败、data 目录永不创建。
+    // std::env::current_exe() 返回实际 exe 的绝对路径，Windows/macOS/Linux 均可靠。
+    let exe = std::env::current_exe()
+        .map_err(|e| format!("无法获取当前可执行文件路径: {}", e))?;
+    let exe_dir = exe
+        .parent()
+        .ok_or_else(|| "无法获取可执行文件所在目录".to_string())?;
+    Ok(data_dir_from_exe(exe_dir))
+}
+
+/// exe 目录 → data 目录的纯拼接逻辑（可单测，无需 AppHandle）
+fn data_dir_from_exe(exe_dir: &Path) -> PathBuf {
+    exe_dir.join("data")
+}
+
+/// 完整数据库文件路径 = exe_dir/data/pmf.db
+pub fn exe_db_path_for(app: &AppHandle) -> Result<PathBuf, String> {
+    Ok(data_dir_for(app)?.join("pmf.db"))
+}
+
 pub fn db_path_for(app: &AppHandle) -> Result<PathBuf, String> {
-    let dir = app
-        .path()
-        .app_data_dir()
-        .map_err(|e| e.to_string())?;
-    Ok(dir.join("pmf.db"))
+    exe_db_path_for(app)
 }
 
 fn open_and_pragmas(path: &Path) -> Result<Connection, String> {
@@ -377,11 +397,35 @@ fn seed_if_empty(conn: &Connection, app: &AppHandle) -> Result<(), String> {
 }
 
 /// Initialize DB file, run migrations, seed. Called from Tauri setup.
+/// 数据库位于 exe 所在目录的 data/ 下；若新库不存在且旧 %APPDATA% 库存在，则自动迁移。
 pub fn init_db(app: &AppHandle) -> Result<PathBuf, String> {
-    let dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
-    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    // exe 旁 data/ 目录；创建失败给出明确指引，绝不静默回退到 AppData
+    let dir = data_dir_for(app)?;
+    std::fs::create_dir_all(&dir).map_err(|e| {
+        format!(
+            "无法创建数据库目录 '{}': {}。\n提示：请确保程序所在目录可写，或以管理员权限运行。",
+            dir.display(),
+            e
+        )
+    })?;
     let db_path = dir.join("pmf.db");
     let is_new_file = !db_path.exists();
+
+    // ---- 旧库自动迁移：新库不存在但旧 AppData 库存在 → SQLite backup API 安全迁移 ----
+    let legacy_path = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| e.to_string())?
+        .join("pmf.db");
+    if is_new_file && legacy_path.exists() {
+        migrate_legacy_db(&legacy_path, &db_path)?;
+        eprintln!(
+            "[pmf] 旧库已迁移: {} → {}",
+            legacy_path.display(),
+            db_path.display()
+        );
+    }
+
     let conn = open_and_pragmas(&db_path)?;
     if is_new_file || is_new_db(&conn) {
         conn.execute_batch(SCHEMA_SQL).map_err(|e| e.to_string())?;
@@ -389,6 +433,29 @@ pub fn init_db(app: &AppHandle) -> Result<PathBuf, String> {
     migrate_if_needed(&conn)?;
     seed_if_empty(&conn, app)?;
     Ok(db_path)
+}
+
+/// 使用 rusqlite 的 backup API 将旧库完整复制到新路径（事务级原子，含 WAL checkpoint）。
+/// 旧库只读不删除，保证回滚安全。
+fn migrate_legacy_db(legacy: &Path, new_path: &Path) -> Result<(), String> {
+    let _ = std::fs::remove_file(new_path);
+    if let Some(parent) = new_path.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|e| format!("无法创建目标目录 '{}': {}", parent.display(), e))?;
+    }
+    // 源库：先 checkpoint WAL 到主文件，再用 backup API 全量复制
+    let src = Connection::open(legacy).map_err(|e| format!("打开旧库失败 '{}': {}", legacy.display(), e))?;
+    let _ = src.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);");
+    let mut dst = Connection::open(new_path).map_err(|e| e.to_string())?;
+    let backup = rusqlite::backup::Backup::new(&src, &mut dst)
+        .map_err(|e| format!("备份初始化失败: {}", e))?;
+    backup
+        .run_to_completion(50, std::time::Duration::from_millis(250), None)
+        .map_err(|e| format!("备份执行失败: {}", e))?;
+    drop(backup);
+    dst.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);")
+        .map_err(|e| e.to_string())?;
+    Ok(())
 }
 
 // ------------------------------------------------------------------
@@ -471,4 +538,129 @@ pub fn db_import_legacy_db(app: AppHandle, legacy_path: String) -> Result<Import
     let _ = conn.execute_batch("DETACH DATABASE legacy;");
     migrate_if_needed(&conn)?;
     Ok(report)
+}
+
+// ------------------------------------------------------------------
+// Unit tests
+// ------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn unique_temp_dir(tag: &str) -> PathBuf {
+        let base = std::env::temp_dir().join(format!("pmf_test_{}_{}", tag, uuid::Uuid::new_v4()));
+        fs_impl::create_dir_all(&base).unwrap();
+        base
+    }
+
+    mod fs_impl {
+        pub use std::fs::*;
+    }
+
+    #[test]
+    fn data_dir_from_exe_returns_data_suffix() {
+        let d = data_dir_from_exe(Path::new("C:/AnyDir/app"));
+        assert!(d.ends_with("data"));
+        assert_eq!(d, PathBuf::from("C:/AnyDir/app/data"));
+        // 完整 db 路径以 pmf.db 结尾
+        assert!(d.join("pmf.db").ends_with("pmf.db"));
+    }
+
+    #[test]
+    fn reset_legacy_db_copies_all_data() {
+        let dir = unique_temp_dir("migrate");
+        let legacy = dir.join("old/pmf.db");
+        fs_impl::create_dir_all(legacy.parent().unwrap()).unwrap();
+        let new_path = dir.join("new/pmf.db");
+
+        // 1) 建旧库并灌入数据
+        {
+            let conn = Connection::open(&legacy).unwrap();
+            conn.execute_batch(SCHEMA_SQL).unwrap();
+            let ts = 1_700_000_000i64;
+            conn.execute_batch(&format!(
+                "INSERT INTO dimensions (id, key, name_cn, name_en, sort_order, is_multi_select, is_enabled, icon, created_at, updated_at, is_deleted) VALUES
+                 ('dim_a','top','上装','Top',1,0,1,NULL,{ts},{ts},0),
+                 ('dim_b','bottom','下装','Bottom',2,0,1,NULL,{ts},{ts},0);"
+            ))
+            .unwrap();
+            conn.execute_batch(&format!(
+                "INSERT INTO modules (id, dimension_id, content_en, display_name, weight, is_enabled, is_nsfw, usage_count, example_image, notes, created_at, updated_at, is_deleted) VALUES
+                 ('moda1','dim_a','white shirt','白衬衫',1.0,1,0,5,NULL,NULL,{ts},{ts},0),
+                 ('moda2','dim_a','black shirt','黑衬衫',1.2,1,0,0,NULL,NULL,{ts},{ts},0),
+                 ('modb1','dim_b','skinny jeans','紧身牛仔裤',1.0,1,0,3,NULL,NULL,{ts},{ts},0);"
+            ))
+            .unwrap();
+            conn.execute_batch(&format!(
+                "INSERT INTO rules (id, name, type, source_dimension_id, source_module_id, target_dimension_id, target_module_id, message, is_enabled, created_at, is_deleted) VALUES
+                 ('rule_x','测试规则','mutex','dim_a',NULL,'dim_b',NULL,'互斥',1,{ts},0);"
+            ))
+            .unwrap();
+            conn.execute_batch(&format!(
+                "INSERT INTO tags (id, name, color, created_at, is_deleted) VALUES ('tag_x','韩系','#ff0000',{ts},0);"
+            ))
+            .unwrap();
+        }
+
+        // 2) 迁移
+        migrate_legacy_db(&legacy, &new_path).unwrap();
+
+        // 3) 新库数据一致
+        let conn = Connection::open(&new_path).unwrap();
+        let dims: i64 = conn
+            .query_row("SELECT COUNT(*) FROM dimensions", [], |r| r.get(0))
+            .unwrap();
+        let mods: i64 = conn
+            .query_row("SELECT COUNT(*) FROM modules", [], |r| r.get(0))
+            .unwrap();
+        let rules: i64 = conn
+            .query_row("SELECT COUNT(*) FROM rules", [], |r| r.get(0))
+            .unwrap();
+        let tags: i64 = conn
+            .query_row("SELECT COUNT(*) FROM tags", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!((dims, mods, rules, tags), (2, 3, 1, 1));
+        // 内容抽样
+        let name: String = conn
+            .query_row(
+                "SELECT name_cn FROM dimensions WHERE key='top'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(name, "上装");
+        let content: String = conn
+            .query_row(
+                "SELECT content_en FROM modules WHERE id='modb1'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(content, "skinny jeans");
+        let msg: String = conn
+            .query_row(
+                "SELECT message FROM rules WHERE id='rule_x'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(msg, "互斥");
+        // 4) 旧库保留不动（回滚安全）
+        assert!(legacy.exists());
+        assert!(new_path.exists());
+        let _ = fs_impl::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn migrate_wal_pragmas_are_applied() {
+        let dir = unique_temp_dir("wal");
+        let db = dir.join("pmf.db");
+        let conn = open_and_pragmas(&db).unwrap();
+        let mode: String = conn
+            .query_row("PRAGMA journal_mode", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(mode, "wal");
+        let _ = fs_impl::remove_dir_all(&dir);
+    }
 }

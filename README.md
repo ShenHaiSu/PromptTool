@@ -28,9 +28,10 @@ bun run tauri build
 - **Node ≥20 / Bun ≥1.1** — 包管理与 Vite 构建
 - **Rust ≥1.77 / Cargo** — Tauri 后端（`rusqlite bundled` 自带 SQLite，无需系统 sqlite3）
 - **WebView2** — Windows 打包依赖（Win10/11 自带，Win7 需 `webviewInstallMode: downloadBootstrapper`）
-- **SQLite DB** — 新库位于 `%APPDATA%/com.pmf.tauri-app/pmf.db`（与旧 `data/pmf.db` 物理隔离）
-  - 首次启动自动建库 + 导入 `resources/schema.sql` + 种子 14 维 / 311 条
-  - 旧库迁移：设置页“导入旧版数据”或 Rust `db_import_legacy_db`（ATTACH + INSERT OR IGNORE）
+- **SQLite DB** — 新库位于 **exe 所在目录 `data/pmf.db`**（`pmf.db-wal/-shm` 伴生），不侵入 `%APPDATA%`；旧 `%APPDATA%/com.pmf.tauri-app/pmf.db` 仅作只读数据源
+  - 首次启动自动建库 + 导入 `resources/schema.sql` + 种子 14 维 / 311 条；旧库存在时自动通过 SQLite Backup API 迁移到新路径（幂等、旧库保留）
+  - exe 目录不可写时明确报错提示，不静默回退到 AppData
+  - 旧库手动导入：设置页“导入旧版数据”或 Rust `db_import_legacy_db`（ATTACH + INSERT OR IGNORE）
 
 ## 目录结构
 

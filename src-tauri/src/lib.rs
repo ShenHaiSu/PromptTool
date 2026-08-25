@@ -10,6 +10,15 @@ pub fn run() {
         .setup(|app| {
             if let Err(e) = init_db(&app.handle()) {
                 eprintln!("[pmf] init_db failed: {}", e);
+                // 落盘日志（release 下无控制台，此为唯一可见出口）
+                if let Ok(exe) = std::env::current_exe() {
+                    if let Some(dir) = exe.parent() {
+                        let _ = std::fs::write(
+                            dir.join("init_db_error.log"),
+                            format!("[pmf] init_db failed: {}\n", e),
+                        );
+                    }
+                }
             }
             Ok(())
         })

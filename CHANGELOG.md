@@ -1,5 +1,15 @@
 # Changelog
 
+## v3.0.1 — 2026-08-25 · 数据库路径迁移
+
+### 数据库路径迁移（Need01-01）
+
+- **路径改写**：`init_db` / `db_path_for` 从 `%APPDATA%/com.pmf.tauri-app/pmf.db` 迁移到 **exe 所在目录 `data/pmf.db`**，不侵入用户路径
+- **旧库自动迁移**：新库不存在时自动使用 rusqlite Backup API（事务级原子，含 WAL checkpoint）将旧库完整复制到新路径，旧库保留不动保证回滚安全
+- **不可写提示**：`create_dir_all` 失败时返回明确错误信息，指导用户管理员权限运行或安装到可写路径，绝不静默回退到 AppData
+- **新增公共函数**：`data_dir_for()` / `exe_db_path_for()` / `migrate_legacy_db()`
+- **单元测试**：3 个测试覆盖路径拼接、全量迁移数据一致性、WAL 模式验证
+
 ## v3.0-tauri — 2026-08-24 · Tauri 重构交付（阶段六）
 
 ### 系统集成与交付（P3 阶段六）
