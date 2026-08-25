@@ -107,12 +107,18 @@ const virtualizer = useVirtualizer(
     count: totalCount.value,
     getScrollElement: () => parentRef.value,
     estimateSize: () => 110,
+    measureElement: (el) => el.getBoundingClientRect().height,
     overscan: 5,
   })),
 )
 
 const virtualItems = computed(() => virtualizer.value.getVirtualItems())
 const totalSize = computed(() => virtualizer.value.getTotalSize())
+
+// 动态测量：将真实渲染的包裹层元素交给 virtualizer 校正行高，避免固定估计值导致卡片重叠
+const measureRow = (el: unknown) => {
+  if (el instanceof HTMLElement) virtualizer.value.measureElement(el as any)
+}
 
 // 当 results 变化时，确保 virtualizer 重算（getVirtualItems 会在滚动时更新）
 watch(totalCount, async () => {
@@ -188,6 +194,7 @@ watch(totalCount, async () => {
           v-for="v in virtualItems"
           :key="String(v.key)"
           :data-index="v.index"
+          :ref="measureRow"
           :style="{
             position: 'absolute',
             top: '0',
