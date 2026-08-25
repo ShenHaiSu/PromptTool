@@ -9,6 +9,8 @@ defineProps<{
   moduleCount: number
 }>()
 
+const emit = defineEmits<{ (e: 'toggle-library'): void }>()
+
 const theme = useThemeStore()
 const assembly = useAssemblyStore()
 const history = useHistoryStore()
@@ -28,6 +30,15 @@ const history = useHistoryStore()
       <span data-testid="status-model" class="rounded bg-background px-1.5 py-0.5 font-mono">{{ assembly.config.modelProfile.toUpperCase() }}</span>
     </div>
     <div class="flex items-center gap-2">
+      <Button
+        data-testid="library-toggle"
+        variant="ghost"
+        size="sm"
+        class="h-6 px-2 text-xs"
+        @click="emit('toggle-library')"
+      >
+        📚 词库
+      </Button>
       <span class="hidden sm:inline">就绪 · Tauri P3</span>
       <Button
         data-testid="theme-toggle"

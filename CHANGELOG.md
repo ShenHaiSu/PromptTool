@@ -1,6 +1,6 @@
 # Changelog
 
-## v3.0.1 — 2026-08-25 · 数据库路径迁移
+## v3.0.1 — 2026-08-25 · 数据库路径迁移 + 词库导出/去重导入
 
 ### 数据库路径迁移（Need01-01）
 
@@ -9,6 +9,17 @@
 - **不可写提示**：`create_dir_all` 失败时返回明确错误信息，指导用户管理员权限运行或安装到可写路径，绝不静默回退到 AppData
 - **新增公共函数**：`data_dir_for()` / `exe_db_path_for()` / `migrate_legacy_db()`
 - **单元测试**：3 个测试覆盖路径拼接、全量迁移数据一致性、WAL 模式验证
+
+### 词库导出/去重导入（Need01-02）
+
+- **后端命令**：`db_export_library`（双模式：path 空返回 JSON 文本 → 前端 Blob 下载；path 非空原子写盘）、`db_import_library`（磁盘文件导入）、`db_import_library_text`（前端文本导入）
+- **导出格式**：标准 `pmf-library` JSON（format/formatVersion/exportedAt/counts + dimensions/modules/rules/tags），仅导出 `is_deleted=0` 数据
+- **去重导入算法**：维度按 `key` 合并/冲突新建；模块按 `id` 或 `dimensionKey+contentEn` 去重；规则按 `id` 或 `name+type+source/target` 签名匹配；标签按 `name` 唯一；FK 引用校验增强安全性
+- **导入模式**：`skip`（默认，保留现有行） / `overwrite`（按文件内容更新现有行）
+- **导入报告**：逐项打印新增/更新/跳过计数，冲突/错误明细可展开查看
+- **前端封装**：`db.ts` 新增 `dbExportLibrary` / `dbImportLibrary` / `dbImportLibraryText` + TypeScript 类型 + 7 个前端 mock 测试
+- **UI 词库管理**：`LibraryDialog.vue` 对话框（导出 Blob 下载、文件选择导入、模式单选、结果报告），入口在 `StatusBar`「📚 词库」按钮，导入后自动刷新统计与词条面板
+- **单元测试**：8 个 Rust 测试覆盖导出完整性、roundtrip、二次幂等、跨 id 去重、维度冲突、overwrite 更新、非法文件拒绝
 
 ## v3.0-tauri — 2026-08-24 · Tauri 重构交付（阶段六）
 

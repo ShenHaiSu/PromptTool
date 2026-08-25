@@ -6,6 +6,7 @@ import BatchFactory from '@/components/BatchFactory.vue'
 import HistoryPanel from '@/components/HistoryPanel.vue'
 import StatusBar from '@/components/StatusBar.vue'
 import AssemblyCanvas from '@/components/AssemblyCanvas.vue'
+import LibraryDialog from '@/components/LibraryDialog.vue'
 import { useAssemblyStore } from '@/stores/assembly'
 import { useHistoryStore } from '@/stores/history'
 import { useSash } from '@/composables/useSash'
@@ -65,6 +66,27 @@ useShortcuts({ focusSearch, save: doSaveShortcut, copy: doCopyShortcut, remove: 
 // Stats for StatusBar — best effort, jsdom 无 Tauri 时回退 14/311
 const dimCount = ref(0)
 const moduleCount = ref(0)
+
+// 词库管理对话框
+const showLibraryDialog = ref(false)
+const dimensionPanelRef = ref<{ refresh: () => Promise<void> } | null>(null)
+function toggleLibrary(): void {
+  showLibraryDialog.value = !showLibraryDialog.value
+}
+/** 导入完成后刷新维度/词条统计，并刷新左侧词条面板 */
+async function refreshStats(): Promise<void> {
+  try {
+    const dims = await dbGetDimensions()
+    dimCount.value = dims.length
+    try {
+      const grouped = await dbGetAllModulesGrouped()
+      let total = 0
+      for (const v of Object.values(grouped)) total += (v as unknown[]).length
+      moduleCount.value = total
+    } catch { /* ignore */ }
+    await dimensionPanelRef.value?.refresh()
+  } catch { /* ignore */ }
+}
 
 // Layout refs for sash drag
 const layoutRef = ref<HTMLElement | null>(null)
@@ -163,7 +185,7 @@ onBeforeUnmount(() => {
           <h2 class="text-sm font-semibold">维度面板</h2>
           <span class="text-xs text-muted-foreground">Tree + 搜索 + NSFW</span>
         </div>
-        <DimensionPanel />
+        <DimensionPanel ref="dimensionPanelRef" />
       </section>
 
       <div
@@ -203,7 +225,13 @@ onBeforeUnmount(() => {
       </section>
     </div>
 
-    <StatusBar :dim-count="dimCount" :module-count="moduleCount" />
+    <StatusBar :dim-count="dimCount" :module-count="moduleCount" @toggle-library="toggleLibrary" />
+
+    <LibraryDialog
+      v-if="showLibraryDialog"
+      @close="showLibraryDialog = false"
+      @imported="refreshStats"
+    />
 
     <!-- Toast 队列：最多 5 条并发，溢出丢弃最旧 -->
     <div data-testid="toasts" class="pointer-events-none fixed bottom-10 right-4 z-50 flex flex-col gap-2">

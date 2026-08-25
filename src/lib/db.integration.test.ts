@@ -10,7 +10,14 @@ vi.mock('@tauri-apps/api/core', () => ({
 }))
 
 // Need to import AFTER mock
-import { dbGetDimensions, dbSearchModules, dbSaveAssembly } from './db'
+import {
+  dbGetDimensions,
+  dbSearchModules,
+  dbSaveAssembly,
+  dbExportLibrary,
+  dbImportLibrary,
+  dbImportLibraryText,
+} from './db'
 import type { AssemblyConfig } from '@/engine/models'
 
 beforeEach(() => mockInvoke.mockReset())
@@ -44,5 +51,36 @@ describe('lib/db invoke mapping', () => {
     expect(payload).toHaveProperty('is_favorite')
     const cfgArg = payload['config'] as Record<string, unknown>
     expect(cfgArg).toBeDefined()
+  })
+
+  it('dbExportLibrary without path returns JSON string', async () => {
+    mockInvoke.mockResolvedValueOnce('{"format":"pmf-library"}')
+    const json = await dbExportLibrary()
+    expect(mockInvoke).toHaveBeenCalledWith('db_export_library', { path: null })
+    expect(json).toContain('pmf-library')
+  })
+
+  it('dbExportLibrary with path passes path through', async () => {
+    mockInvoke.mockResolvedValueOnce('{"format":"pmf-library"}')
+    await dbExportLibrary('C:/tmp/pmf-library.json')
+    expect(mockInvoke).toHaveBeenCalledWith('db_export_library', { path: 'C:/tmp/pmf-library.json' })
+  })
+
+  it('dbImportLibrary passes path and mode (snake_case params)', async () => {
+    const report = { dimensionsCreated: 1, dimensionsUpdated: 0, dimensionsSkipped: 0, modulesCreated: 2, modulesUpdated: 0, modulesSkipped: 0, rulesCreated: 0, rulesUpdated: 0, rulesSkipped: 0, tagsCreated: 0, tagsSkipped: 0, errors: [] }
+    mockInvoke.mockResolvedValueOnce(report)
+    const r = await dbImportLibrary('C:/tmp/in.json', 'skip')
+    expect(mockInvoke).toHaveBeenCalledWith('db_import_library', { path: 'C:/tmp/in.json', mode: 'skip' })
+    expect(r.dimensionsCreated).toBe(1)
+  })
+
+  it('dbImportLibraryText passes text and mode', async () => {
+    const report = { dimensionsCreated: 0, dimensionsUpdated: 0, dimensionsSkipped: 1, modulesCreated: 0, modulesUpdated: 0, modulesSkipped: 0, rulesCreated: 0, rulesUpdated: 0, rulesSkipped: 0, tagsCreated: 0, tagsSkipped: 0, errors: [] }
+    mockInvoke.mockResolvedValueOnce(report)
+    await dbImportLibraryText('{"format":"pmf-library"}', 'overwrite')
+    expect(mockInvoke).toHaveBeenCalledWith('db_import_library_text', {
+      text: '{"format":"pmf-library"}',
+      mode: 'overwrite',
+    })
   })
 })

@@ -339,3 +339,48 @@ export type ImportReport = {
 export async function dbImportLegacyDb(legacyPath: string): Promise<ImportReport> {
   return invoke<ImportReport>('db_import_legacy_db', { legacy_path: legacyPath })
 }
+
+// ------------------------------------------------------------------
+// 词库导出 / 去重导入（pmf-library JSON）
+// ------------------------------------------------------------------
+export type ImportMode = 'skip' | 'overwrite'
+
+export type LibraryImportReport = {
+  dimensionsCreated: number
+  dimensionsUpdated: number
+  dimensionsSkipped: number
+  modulesCreated: number
+  modulesUpdated: number
+  modulesSkipped: number
+  rulesCreated: number
+  rulesUpdated: number
+  rulesSkipped: number
+  tagsCreated: number
+  tagsSkipped: number
+  errors: string[]
+}
+
+/**
+ * 导出词库。
+ * - path 为空 → 返回 JSON 文本（前端可 Blob 下载）
+ * - path 非空 → Rust 原子写盘后同样返回 JSON 文本
+ */
+export async function dbExportLibrary(path?: string): Promise<string> {
+  return invoke<string>('db_export_library', { path: path ?? null })
+}
+
+/** 从磁盘文件去重导入词库（path 方式，供文件对话框/脚本使用） */
+export async function dbImportLibrary(
+  path: string,
+  mode: ImportMode,
+): Promise<LibraryImportReport> {
+  return invoke<LibraryImportReport>('db_import_library', { path, mode })
+}
+
+/** 从 JSON 文本去重导入词库（前端 `<input type=file>` 读取内容后调用） */
+export async function dbImportLibraryText(
+  text: string,
+  mode: ImportMode,
+): Promise<LibraryImportReport> {
+  return invoke<LibraryImportReport>('db_import_library_text', { text, mode })
+}

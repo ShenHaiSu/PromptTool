@@ -32,6 +32,7 @@ bun run tauri build
   - 首次启动自动建库 + 导入 `resources/schema.sql` + 种子 14 维 / 311 条；旧库存在时自动通过 SQLite Backup API 迁移到新路径（幂等、旧库保留）
   - exe 目录不可写时明确报错提示，不静默回退到 AppData
   - 旧库手动导入：设置页“导入旧版数据”或 Rust `db_import_legacy_db`（ATTACH + INSERT OR IGNORE）
+- **词库导出/去重导入** — `db_export_library` / `db_import_library(_text)`：标准 `pmf-library` JSON（维度按 `key`、词条按 `id`/`dimensionKey+contentEn`、规则按 `id`/签名、标签按 `name` 去重合并）；UI 入口在底部 `StatusBar` 的「📚 词库」按钮
 
 ## 目录结构
 

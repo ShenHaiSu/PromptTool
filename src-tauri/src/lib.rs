@@ -45,6 +45,9 @@ pub fn run() {
             commands::db::db_apply_template,
             commands::db::db_soft_delete_template,
             commands::db::db_export_csv,
+            commands::db::db_export_library,
+            commands::db::db_import_library,
+            commands::db::db_import_library_text,
             commands::migration::db_import_legacy_db
         ])
         .run(tauri::generate_context!())
