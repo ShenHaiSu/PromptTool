@@ -194,6 +194,47 @@ export async function dbSoftDeleteModule(id: string): Promise<void> {
 }
 
 // ------------------------------------------------------------------
+// Dimension CRUD (Need02 §02)
+// ------------------------------------------------------------------
+export async function dbCreateDimension(
+  key: string,
+  nameCn: string,
+  nameEn?: string,
+  sortOrder?: number,
+  isMultiSelect?: boolean,
+): Promise<Dimension> {
+  const d = await invoke<DimensionDto>('db_create_dimension', {
+    key,
+    nameCn,
+    nameEn: nameEn ?? null,
+    sortOrder: sortOrder ?? 0,
+    isMultiSelect: isMultiSelect ?? false,
+  })
+  return toDimension(d)
+}
+
+export async function dbUpdateDimension(d: Dimension): Promise<void> {
+  await invoke('db_update_dimension', {
+    d: {
+      id: d.id,
+      key: d.key,
+      nameCn: d.nameCn,
+      nameEn: d.nameEn || null,
+      sortOrder: d.sortOrder,
+      isMultiSelect: d.isMultiSelect,
+      isEnabled: d.isEnabled,
+      icon: d.icon ?? null,
+      createdAt: d.createdAt ?? null,
+      updatedAt: d.updatedAt ?? null,
+    },
+  })
+}
+
+export async function dbSoftDeleteDimension(id: string): Promise<void> {
+  await invoke('db_soft_delete_dimension', { id })
+}
+
+// ------------------------------------------------------------------
 // Assemblies
 // ------------------------------------------------------------------
 export async function dbSaveAssembly(
