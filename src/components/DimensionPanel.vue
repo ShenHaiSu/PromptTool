@@ -76,8 +76,8 @@ async function refresh(): Promise<void> {
   try {
     const dims = await dbGetDimensions()
     dimensions.value = dims
-    // 默认展开全部（与原 Treeview 行为对齐）
-    expandedKeys.value = new Set(dims.map((d) => d.key))
+    // 默认折叠（用户按需展开）
+    expandedKeys.value = new Set<string>()
     try {
       const grouped = await dbGetAllModulesGrouped()
       // grouped key 为 dimension key，需映射到 id
