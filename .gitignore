@@ -62,3 +62,6 @@ data/
 *.db
 *.sqlite
 *.sqlite3
+
+# ZCode session data
+.zcode/
