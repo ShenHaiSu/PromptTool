@@ -9,7 +9,7 @@ defineProps<{
   moduleCount: number
 }>()
 
-const emit = defineEmits<{ (e: 'toggle-library'): void }>()
+const emit = defineEmits<{ (e: 'toggle-library'): void; (e: 'toggle-segment-import'): void }>()
 
 const theme = useThemeStore()
 const assembly = useAssemblyStore()
@@ -30,6 +30,15 @@ const history = useHistoryStore()
       <span data-testid="status-model" class="rounded bg-background px-1.5 py-0.5 font-mono">{{ assembly.config.modelProfile.toUpperCase() }}</span>
     </div>
     <div class="flex items-center gap-2">
+      <Button
+        data-testid="segment-import-toggle"
+        variant="ghost"
+        size="sm"
+        class="h-6 px-2 text-xs"
+        @click="emit('toggle-segment-import')"
+      >
+        📥 分段导入
+      </Button>
       <Button
         data-testid="library-toggle"
         variant="ghost"

@@ -7,6 +7,7 @@ import HistoryPanel from '@/components/HistoryPanel.vue'
 import StatusBar from '@/components/StatusBar.vue'
 import AssemblyCanvas from '@/components/AssemblyCanvas.vue'
 import LibraryDialog from '@/components/LibraryDialog.vue'
+import SegmentImportDialog from '@/components/SegmentImportDialog.vue'
 import { useAssemblyStore } from '@/stores/assembly'
 import { useHistoryStore } from '@/stores/history'
 import { useSash } from '@/composables/useSash'
@@ -69,9 +70,13 @@ const moduleCount = ref(0)
 
 // 词库管理对话框
 const showLibraryDialog = ref(false)
+const showSegmentImport = ref(false)
 const dimensionPanelRef = ref<{ refresh: () => Promise<void> } | null>(null)
 function toggleLibrary(): void {
   showLibraryDialog.value = !showLibraryDialog.value
+}
+function toggleSegmentImport(): void {
+  showSegmentImport.value = !showSegmentImport.value
 }
 /** 导入完成后刷新维度/词条统计，并刷新左侧词条面板 */
 async function refreshStats(): Promise<void> {
@@ -225,11 +230,18 @@ onBeforeUnmount(() => {
       </section>
     </div>
 
-    <StatusBar :dim-count="dimCount" :module-count="moduleCount" @toggle-library="toggleLibrary" />
+    <StatusBar :dim-count="dimCount" :module-count="moduleCount" @toggle-library="toggleLibrary" @toggle-segment-import="toggleSegmentImport" />
 
     <LibraryDialog
       v-if="showLibraryDialog"
       @close="showLibraryDialog = false"
+      @imported="refreshStats"
+    />
+
+    <SegmentImportDialog
+      v-if="showSegmentImport"
+      :open="showSegmentImport"
+      @update:open="showSegmentImport = $event"
       @imported="refreshStats"
     />
 
