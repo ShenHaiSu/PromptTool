@@ -428,3 +428,49 @@ export async function dbImportLibraryText(
 ): Promise<LibraryImportReport> {
   return invoke<LibraryImportReport>('db_import_library_text', { text, mode })
 }
+
+// ------------------------------------------------------------------
+// 分段批量入库（pmf-segments — Need03）
+// ------------------------------------------------------------------
+export type SegmentImportItem = {
+  dimensionKey: string
+  dimensionId?: string | null
+  contentEn: string
+  displayName?: string | null
+  weight?: number | null
+  isNsfw?: boolean
+  notes?: string | null
+}
+
+export type SegmentImportPayload = {
+  format: string
+  formatVersion: number
+  prompts: { id: string; raw: string; segments: SegmentImportItem[] }[]
+  unassignedStrategy: 'ignore' | 'to_camera' | 'prompt_new'
+  mode: ImportMode
+}
+
+export type SegmentImportReport = {
+  prompts: number
+  segmentsTotal: number
+  segmentsImported: number
+  segmentsSkipped: number
+  segmentsIgnoredUnassigned: number
+  modulesCreated: number
+  modulesUpdated: number
+  modulesSkipped: number
+  errors: string[]
+  warnings: string[]
+}
+
+export async function dbImportSegments(payload: SegmentImportPayload): Promise<SegmentImportReport> {
+  return invoke<SegmentImportReport>('db_import_segments', { payload })
+}
+
+export async function dbImportSegmentsText(
+  text: string,
+  unassignedStrategy: 'ignore' | 'to_camera' | 'prompt_new',
+  mode: ImportMode,
+): Promise<SegmentImportReport> {
+  return invoke<SegmentImportReport>('db_import_segments_text', { text, unassignedStrategy, mode })
+}

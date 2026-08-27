@@ -51,6 +51,8 @@ pub fn run() {
             commands::db::db_export_library,
             commands::db::db_import_library,
             commands::db::db_import_library_text,
+            commands::segment::db_import_segments,
+            commands::segment::db_import_segments_text,
             commands::migration::db_import_legacy_db
         ])
         .run(tauri::generate_context!())

@@ -1249,7 +1249,7 @@ fn id_is_free(conn: &Connection, table: &str, id: &str) -> bool {
 }
 
 /// 模块 → 库内目标维度 id：优先 dimensionKey → 文件维度映射 → 库内 id 直查
-fn resolve_module_dimension(
+pub(crate) fn resolve_module_dimension(
     conn: &Connection,
     fmod: &ModuleDto,
     dim_id_map: &std::collections::HashMap<String, String>,
@@ -1282,7 +1282,7 @@ fn resolve_module_dimension(
 }
 
 /// 模块去重判定：(a) id 命中；(b) 同维度下 content_en 精确匹配（取 created_at 最早）
-fn find_module_hit(
+pub(crate) fn find_module_hit(
     conn: &Connection,
     fmod: &ModuleDto,
     dim_id: &str,
