@@ -14,10 +14,14 @@ import { useSash } from '@/composables/useSash'
 import { appToasts, useToast } from '@/composables/useToast'
 import { useShortcuts } from '@/composables/useShortcuts'
 import { useThemeStore } from '@/stores/theme'
-import { dbGetDimensions, dbGetAllModulesGrouped } from '@/lib/db'
+import BusinessDbOnboardingDialog from '@/components/BusinessDbOnboardingDialog.vue'
+import DbManagerDrawer from '@/components/DbManagerDrawer.vue'
+import { useDbRegistryStore } from '@/stores/dbRegistry'
+import { dbGetDimensions, dbGetAllModulesGrouped, dbGetTempCarry } from '@/lib/db'
 
 const assembly = useAssemblyStore()
 const historyStore = useHistoryStore()
+const dbRegistry = useDbRegistryStore()
 const themeStore = useThemeStore()
 void themeStore.mode // 触发 theme 初始化副作用（已在 store 构造时 applyTheme）
 const { leftFrac, centerFrac, setFracs } = useSash()
@@ -69,6 +73,8 @@ const dimCount = ref(0)
 const moduleCount = ref(0)
 
 // 词库管理对话框
+const showDbManager = ref(false)
+
 const showLibraryDialog = ref(false)
 const showSegmentImport = ref(false)
 const dimensionPanelRef = ref<{ refresh: () => Promise<void> } | null>(null)
@@ -147,11 +153,23 @@ function onPointerUp(e: PointerEvent): void {
 }
 
 onMounted(async () => {
-  // 持久化几何：768p 溢出保护 + localStorage 双写（Rust save_window_state 可选）
   try {
     const { persistGeometry } = await import('@/composables/usePersist')
     persistGeometry()
   } catch { /* ignore */ }
+
+  // Need04首帧守卫
+  try {
+    await dbRegistry.fetchActiveInfo()
+    await dbRegistry.fetchList()
+    if (!dbRegistry.activeInfo?.foreground) {
+      dbRegistry.onboardingOpen = true
+      return
+    }
+  } catch {
+    dbRegistry.onboardingOpen = true
+    return
+  }
 
   try {
     const dims = await dbGetDimensions()
@@ -161,6 +179,26 @@ onMounted(async () => {
       let total = 0
       for (const v of Object.values(grouped)) total += (v as unknown[]).length
       moduleCount.value = total
+      // 恢复 temp_carry
+      try {
+        const carry = await dbGetTempCarry()
+        if (carry && carry.selectedItemIds?.length) {
+          const validIds = new Set<string>()
+          for (const arr of Object.values(grouped)) for (const m of arr) validIds.add((m as { id: string }).id)
+          const filtered = carry.selectedItemIds.filter((id) => validIds.has(id))
+          if (filtered.length) {
+            const idToModule = new Map<string, unknown>()
+            for (const arr of Object.values(grouped)) for (const m of arr as unknown as { id: string }[]) idToModule.set(m.id, m)
+            const items = filtered.map((id) => {
+              const mod = idToModule.get(id) as { id: string; dimensionId?: string } | undefined
+              if (!mod) return null
+              const w = carry.weightDraft?.[id] ?? null
+              return { module: mod, locked: false, weightOverride: w }
+            }).filter(Boolean) as typeof assembly.selectedItems
+            assembly.setSelected(items)
+          }
+        }
+      } catch { /* ignore carry */ }
     } catch { /* ignore in jsdom */ }
   } catch { /* ignore */ }
   try { await historyStore.fetchAll() } catch { /* ignore */ }
@@ -230,7 +268,10 @@ onBeforeUnmount(() => {
       </section>
     </div>
 
-    <StatusBar :dim-count="dimCount" :module-count="moduleCount" @toggle-library="toggleLibrary" @toggle-segment-import="toggleSegmentImport" />
+    <StatusBar :dim-count="dimCount" :module-count="moduleCount" @toggle-library="toggleLibrary" @toggle-segment-import="toggleSegmentImport" @toggle-db-manager="showDbManager = true" />
+
+    <BusinessDbOnboardingDialog :open="dbRegistry.onboardingOpen" @update:open="dbRegistry.onboardingOpen = $event" />
+    <DbManagerDrawer :open="showDbManager" @update:open="showDbManager = $event" />
 
     <LibraryDialog
       v-if="showLibraryDialog"
