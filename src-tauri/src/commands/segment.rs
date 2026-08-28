@@ -3,15 +3,8 @@ use serde::{Deserialize, Serialize};
 use tauri::AppHandle;
 
 use super::db::find_module_hit;
-use super::migration::db_path_for;
+use super::meta::open_active_conn as open_conn;
 
-fn open_conn(app: &AppHandle) -> Result<rusqlite::Connection, String> {
-    let path = db_path_for(app)?;
-    let conn = rusqlite::Connection::open(&path).map_err(|e| e.to_string())?;
-    conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;")
-        .map_err(|e| e.to_string())?;
-    Ok(conn)
-}
 
 fn now_ts() -> i64 {
     chrono::Utc::now().timestamp()
