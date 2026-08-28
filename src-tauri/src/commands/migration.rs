@@ -132,7 +132,7 @@ fn is_new_db(conn: &Connection) -> bool {
     count == 0
 }
 
-fn migrate_if_needed(conn: &Connection) -> Result<(), String> {
+pub fn migrate_if_needed(conn: &Connection) -> Result<(), String> {
     // Check is_nsfw column exists
     let cols: Vec<String> = conn
         .prepare("PRAGMA table_info(modules)")
@@ -164,7 +164,7 @@ fn migrate_if_needed(conn: &Connection) -> Result<(), String> {
     Ok(())
 }
 
-fn ensure_dimensions(conn: &Connection) -> Result<(), String> {
+pub fn ensure_dimensions(conn: &Connection) -> Result<(), String> {
     let ts = chrono::Utc::now().timestamp();
     let dims: Vec<(&str, &str, &str, &str, i64, i64)> = vec![
         ("dim_01", "body", "模特身材特点", "Body", 4, 0),
@@ -199,7 +199,7 @@ fn ensure_dimensions(conn: &Connection) -> Result<(), String> {
     Ok(())
 }
 
-fn mark_nsfw_modules(conn: &Connection) -> Result<(), String> {
+pub fn mark_nsfw_modules(conn: &Connection) -> Result<(), String> {
     for mid in NSFW_MODULE_IDS {
         let _ = conn.execute("UPDATE modules SET is_nsfw=1 WHERE id=?1", rusqlite::params![mid]);
     }
@@ -207,7 +207,7 @@ fn mark_nsfw_modules(conn: &Connection) -> Result<(), String> {
     Ok(())
 }
 
-fn disable_deprecated_gender(conn: &Connection) -> Result<(), String> {
+pub fn disable_deprecated_gender(conn: &Connection) -> Result<(), String> {
     let ts = chrono::Utc::now().timestamp();
     let placeholders = DISABLED_GENDER_IDS
         .iter()
@@ -227,7 +227,7 @@ fn disable_deprecated_gender(conn: &Connection) -> Result<(), String> {
     Ok(())
 }
 
-fn import_sample_prompts(conn: &Connection, app: &AppHandle) -> Result<usize, String> {
+pub fn import_sample_prompts(conn: &Connection, app: &AppHandle) -> Result<usize, String> {
     // Resolve samplePrompt dir: prefer bundled resources, fallback to docs/samplePrompt
     let candidate_dirs: Vec<PathBuf> = {
         let mut v = Vec::new();
@@ -331,6 +331,32 @@ fn import_sample_prompts(conn: &Connection, app: &AppHandle) -> Result<usize, St
         }
     }
     Ok(count)
+}
+
+
+pub fn schema_sql() -> &'static str {
+    SCHEMA_SQL
+}
+
+pub fn seed_rules_if_empty(conn: &Connection) -> Result<(), String> {
+    let rule_count: i64 = conn
+        .query_row("SELECT COUNT(*) FROM rules WHERE is_deleted=0", [], |r| r.get(0))
+        .unwrap_or(0);
+    if rule_count == 0 {
+        let ts = chrono::Utc::now().timestamp();
+        let rules: Vec<(&str, &str, &str, &str, Option<&str>, &str, Option<&str>, &str)> = vec![
+            ("rule_01","套装互斥","mutex","dim_05",None,"dim_03",None,"已选全身套装，上装/下装将自动忽略"),
+            ("rule_02","鞋袜与赤脚互斥","mutex","dim_06",Some("mod_shoes_15"),"dim_06",None,"赤脚与鞋袜不可共存"),
+            ("rule_03","室内外背景互斥","excludes","dim_10",Some("mod_bg_01"),"dim_10",None,"室内背景与户外背景冲突"),
+        ];
+        for (id, name, ty, src_dim, src_mod, tgt_dim, tgt_mod, msg) in rules {
+            conn.execute(
+                "INSERT OR IGNORE INTO rules (id, name, type, source_dimension_id, source_module_id, target_dimension_id, target_module_id, message, is_enabled, created_at, is_deleted) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 1, ?9, 0)",
+                rusqlite::params![id, name, ty, src_dim, src_mod, tgt_dim, tgt_mod, msg, ts],
+            ).map_err(|e| e.to_string())?;
+        }
+    }
+    Ok(())
 }
 
 fn seed_if_empty(conn: &Connection, app: &AppHandle) -> Result<(), String> {
@@ -437,7 +463,7 @@ pub fn init_db(app: &AppHandle) -> Result<PathBuf, String> {
 
 /// 使用 rusqlite 的 backup API 将旧库完整复制到新路径（事务级原子，含 WAL checkpoint）。
 /// 旧库只读不删除，保证回滚安全。
-fn migrate_legacy_db(legacy: &Path, new_path: &Path) -> Result<(), String> {
+pub fn migrate_legacy_db(legacy: &Path, new_path: &Path) -> Result<(), String> {
     let _ = std::fs::remove_file(new_path);
     if let Some(parent) = new_path.parent() {
         std::fs::create_dir_all(parent)

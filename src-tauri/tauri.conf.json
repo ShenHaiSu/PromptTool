@@ -34,6 +34,9 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ],
-    "resources": ["resources/schema.sql"]
+    "resources": [
+      "resources/schema.sql",
+      "resources/meta_schema.sql"
+    ]
   }
 }
