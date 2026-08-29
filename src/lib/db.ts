@@ -324,13 +324,23 @@ export async function dbSaveTemplate(
   config: AssemblyConfig,
   enabledKeys: string[],
   cover: string | null,
+  selectedItems: SelectedItem[],
 ): Promise<string> {
+  if (selectedItems.length === 0) throw new Error('模板内容为空，请先配置画布')
+  for (const it of selectedItems) {
+    if (!it.module.dimensionKey?.trim()) throw new Error(`模板项缺少 dimensionKey: moduleId=${it.module.id}`)
+  }
   return invoke<string>('db_save_template', {
     name,
     desc,
     config: toConfigDto(config),
     enabledKeys,
     cover,
+    selectedItems: selectedItems.map((it) => ({
+      module: toModuleDto(it.module),
+      weightOverride: it.weightOverride ?? null,
+      locked: it.locked,
+    })),
   })
 }
 
@@ -341,8 +351,9 @@ export async function dbListTemplates(): Promise<Template[]> {
 
 export async function dbApplyTemplate(
   id: string,
-): Promise<[AssemblyConfig, string[]]> {
-  const [cfg, keys] = await invoke<[AssemblyConfigDtoRaw, string[]]>('db_apply_template', { id })
+): Promise<[AssemblyConfig, string[], SelectedItem[]]> {
+  const [cfg, keys, items] = await invoke<[AssemblyConfigDtoRaw, string[], { module: ModuleDto; weightOverride: number | null; locked: boolean }[]]>('db_apply_template', { id })
+  if (items.some((r) => !r.module.dimensionKey?.trim())) throw new Error('模板回填 dimensionKey 为空')
   return [
     {
       separator: cfg.separator,
@@ -351,6 +362,7 @@ export async function dbApplyTemplate(
       sortBy: cfg.sortBy as AssemblyConfig['sortBy'],
     },
     keys,
+    items.map((r) => ({ module: toModule(r.module), weightOverride: r.weightOverride, locked: r.locked })),
   ]
 }
 

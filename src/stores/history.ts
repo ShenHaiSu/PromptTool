@@ -108,20 +108,21 @@ export const useHistoryStore = defineStore('history', () => {
     return dbLoadSelectedItems(assemblyId)
   }
 
-  // 模板
+  // 模板 — Need04 破坏性：必传 selectedItems，返回值含 items 三元组
   async function saveTemplate(
     name: string,
     desc: string | null,
     config: AssemblyConfig,
     enabledKeys: string[],
     cover: string | null,
+    selectedItems: SelectedItem[],
   ): Promise<string> {
-    const id = await dbSaveTemplate(name, desc, config, enabledKeys, cover)
+    const id = await dbSaveTemplate(name, desc, config, enabledKeys, cover, selectedItems)
     await fetchTemplates()
     return id
   }
 
-  async function applyTemplate(id: string): Promise<[AssemblyConfig, string[]]> {
+  async function applyTemplate(id: string): Promise<[AssemblyConfig, string[], SelectedItem[]]> {
     return dbApplyTemplate(id)
   }
 

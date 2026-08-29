@@ -59,11 +59,10 @@ function onRefill(): void {
     const ok = window.confirm(`当前画布已有 ${assembly.selectedItems.length} 项，回填将覆盖为批量方案，是否继续？`)
     if (!ok) return
   }
-  // 将 ir segments 回填为 SelectedItem（尽力还原；contentEn 即 segment.text）
   const items = props.model.ir.segments.map((seg) => ({
     module: {
       id: seg.sourceModuleId,
-      dimensionId: seg.dimensionKey,
+      dimensionId: '',
       contentEn: seg.text,
       displayName: seg.text.length > 24 ? seg.text.slice(0, 24) : seg.text,
       weight: seg.weight,

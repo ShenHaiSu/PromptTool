@@ -128,14 +128,19 @@ function onSaveAsTemplateFromAssembly(id: string): void {
 }
 
 async function onTemplateConfirm(payload: { name: string; desc: string | null }): Promise<void> {
-  // 当前模板快照：以 assembly.config + enabledKeys(当前已选的 dimensionKey 去重) 为 payload
   const name = payload.name.trim()
   if (!name) { push('模板名称不能为空', 'warning'); return }
   const cfg = assembly.config
-  const enabledKeys = [...new Set(assembly.selectedItems.map((it) => it.module.dimensionKey).filter(Boolean) as string[])]
+  let items = [...assembly.selectedItems]
+  if (tmplAssemblyId.value) {
+    try { items = await history.loadSelectedItems(tmplAssemblyId.value) } catch { /* 回退到当前画布 */ }
+  }
+  if (items.length === 0) { push('模板内容为空，无法保存', 'warning'); tmplAssemblyId.value = null; return }
+  if (items.some((it) => !it.module.dimensionKey?.trim())) { push('存在缺失分类的词条，无法存为模板', 'error'); tmplAssemblyId.value = null; return }
+  const enabledKeys = [...new Set(items.map((it) => it.module.dimensionKey).filter(Boolean) as string[])]
   const cover = assembly.finalPrompt || null
   try {
-    await history.saveTemplate(name, payload.desc, cfg, enabledKeys, cover)
+    await history.saveTemplate(name, payload.desc, cfg, enabledKeys, cover, items)
     push('已另存为模板', 'success', 1500)
   } catch (e) { push(`保存模板失败: ${String(e)}`, 'error') }
   tmplAssemblyId.value = null
@@ -159,11 +164,21 @@ async function restoreAssembly(id: string): Promise<void> {
 }
 
 async function applyTemplateById(id: string): Promise<void> {
+  if (assembly.selectedItems.length > 0) {
+    const ok = window.confirm(`当前画布已有 ${assembly.selectedItems.length} 项，应用模板将覆盖为模板内容，是否继续？`)
+    if (!ok) return
+  }
   try {
-    const [cfg, _keys] = await history.applyTemplate(id)
-    // 回写 assembly.config（enabledKeys 为模板的 enabled_dimension_keys，暂仅提示；完整启用/禁用需接 DimensionPanel，可在后续阶段六扩展）
+    const [cfg, _keys, items] = await history.applyTemplate(id)
     assembly.setConfig(cfg as Partial<typeof assembly.config>)
-    push('已应用模板配置', 'success', 1500)
+    const invalidCount = items.filter((it) => (it.module.displayName ?? '').startsWith('[已失效]')).length
+    assembly.setItems(items as typeof assembly.selectedItems)
+    if (items.some((it) => !it.module.dimensionKey?.trim())) {
+      push('模板回填分类异常：存在空 dimensionKey', 'error')
+      return
+    }
+    if (invalidCount > 0) push(`已应用模板（${invalidCount} 项已失效为占位）`, 'warning', 2200)
+    else push('已应用模板', 'success', 1500)
   } catch (e) { push(`应用模板失败: ${String(e)}`, 'error') }
 }
 

@@ -152,9 +152,11 @@ async function onSaveFavorite(): Promise<void> {
 async function onTemplateConfirm(payload: { name: string; desc: string | null }): Promise<void> {
   const name = payload.name.trim()
   if (!name) { push('模板名称不能为空', 'warning'); return }
+  if (assembly.selectedItems.length === 0) { push('模板内容为空，请先配置画布', 'warning'); return }
+  if (assembly.selectedItems.some((it) => !it.module.dimensionKey?.trim())) { push('存在缺失分类的词条，无法存为模板', 'error'); return }
   const enabledKeys = [...new Set(assembly.selectedItems.map((it) => it.module.dimensionKey).filter(Boolean) as string[])]
   try {
-    await history.saveTemplate(name, payload.desc, assembly.config, enabledKeys, assembly.finalPrompt || null)
+    await history.saveTemplate(name, payload.desc, assembly.config, enabledKeys, assembly.finalPrompt || null, [...assembly.selectedItems])
     push('已另存为模板', 'success', 1500)
   } catch (e) { push(`保存模板失败: ${String(e)}`, 'error') }
 }
