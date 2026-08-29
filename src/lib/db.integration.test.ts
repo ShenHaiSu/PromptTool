@@ -83,4 +83,27 @@ describe('lib/db invoke mapping', () => {
       mode: 'overwrite',
     })
   })
+
+  it('dbGetDefaultExportDir calls without args', async () => {
+    mockInvoke.mockResolvedValueOnce('E:/app/data/output')
+    const { dbGetDefaultExportDir } = await import('./db')
+    const dir = await dbGetDefaultExportDir()
+    expect(mockInvoke).toHaveBeenCalledWith('db_get_default_export_dir')
+    expect(dir).toBe('E:/app/data/output')
+  })
+
+  it('dbExportLibraryToDir passes dir with camelCase key', async () => {
+    const { dbExportLibraryToDir } = await import('./db')
+    mockInvoke.mockResolvedValueOnce({ path: 'E:/app/data/output/pmf-library-20260829-153022.json', json: '{}', filename: 'pmf-library-20260829-153022.json' })
+    const res = await dbExportLibraryToDir('E:/app/data/output')
+    expect(mockInvoke).toHaveBeenCalledWith('db_export_library_to_dir', { dir: 'E:/app/data/output' })
+    expect(res.filename).toContain('pmf-library-')
+  })
+
+  it('dbRevealInExplorer passes path with camelCase key', async () => {
+    const { dbRevealInExplorer } = await import('./db')
+    mockInvoke.mockResolvedValueOnce(undefined)
+    await dbRevealInExplorer('E:/app/data/output/pm.json')
+    expect(mockInvoke).toHaveBeenCalledWith('db_reveal_in_explorer', { path: 'E:/app/data/output/pm.json' })
+  })
 })

@@ -397,8 +397,29 @@ export async function dbImportLegacyDb(legacyPath: string): Promise<ImportReport
 }
 
 // ------------------------------------------------------------------
-// 词库导出 / 去重导入（pmf-library JSON）
+// 词库导出 / 去重导入（pmf-library JSON） + Need02 落盘
 // ------------------------------------------------------------------
+
+/** 默认导出目录（exe/data/output） */
+export async function dbGetDefaultExportDir(): Promise<string> {
+  return invoke<string>('db_get_default_export_dir')
+}
+
+export type ExportToDirResult = {
+  path: string
+  json: string
+  filename: string
+}
+
+/** 将当前词库导出并落盘到指定目录（目录不存在则自动创建） */
+export async function dbExportLibraryToDir(dir: string): Promise<ExportToDirResult> {
+  return invoke<ExportToDirResult>('db_export_library_to_dir', { dir })
+}
+
+/** 在系统文件管理器中打开/选中路径 */
+export async function dbRevealInExplorer(path: string): Promise<void> {
+  await invoke('db_reveal_in_explorer', { path })
+}
 export type ImportMode = 'skip' | 'overwrite'
 
 export type LibraryImportReport = {
