@@ -10,6 +10,7 @@ use tauri::Manager;
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
             // --- Need04: Default.db + AppState ---
             let data_dir = match commands::migration::data_dir_for(&app.handle()) {
@@ -91,7 +92,10 @@ pub fn run() {
             commands::business::db_repair_path,
             commands::business::db_rebuild_missing,
             commands::business::db_remove_registry,
-            commands::business::db_update_registry_meta
+            commands::business::db_update_registry_meta,
+            commands::export::db_get_default_export_dir,
+            commands::export::db_export_library_to_dir,
+            commands::export::db_reveal_in_explorer
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
