@@ -148,6 +148,26 @@ pub fn migrate_if_needed(conn: &Connection) -> Result<(), String> {
         )
         .map_err(|e| e.to_string())?;
     }
+    // Need04: assembly_items.dimension_key (破坏性迁移，老库一次性 ALTER)
+    let ai_cols: Vec<String> = conn
+        .prepare("PRAGMA table_info(assembly_items)")
+        .map_err(|e| e.to_string())?
+        .query_map([], |row| row.get(1))
+        .map_err(|e| e.to_string())?
+        .collect::<Result<Vec<String>, _>>()
+        .map_err(|e| e.to_string())?;
+    if !ai_cols.iter().any(|c| c == "dimension_key") {
+        conn.execute(
+            "ALTER TABLE assembly_items ADD COLUMN dimension_key TEXT NOT NULL DEFAULT ''",
+            [],
+        )
+        .map_err(|e| e.to_string())?;
+    }
+    // Need04: template_items 明细表
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS template_items (id TEXT PRIMARY KEY, template_id TEXT NOT NULL REFERENCES templates(id) ON DELETE CASCADE, module_id TEXT NOT NULL REFERENCES modules(id), dimension_key TEXT NOT NULL, sort_order INTEGER NOT NULL DEFAULT 0, weight_override REAL, is_locked INTEGER NOT NULL DEFAULT 0); CREATE INDEX IF NOT EXISTS idx_template_items_template ON template_items(template_id);",
+    )
+    .map_err(|e| e.to_string())?;
     // P0-01 indexes (idempotent)
     let _ = conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_assemblies_favorite ON assemblies(is_favorite) WHERE is_deleted = 0",

@@ -93,21 +93,35 @@ CREATE TABLE IF NOT EXISTS assembly_items (
     sort_order        INTEGER NOT NULL DEFAULT 0,   -- 在拼装中的排序
     weight_override   REAL,                          -- 权重覆盖（NULL 表示用条目默认权重）
     is_locked         INTEGER NOT NULL DEFAULT 0,   -- 0=未锁定, 1=锁定（随机时保留）
+    dimension_key     TEXT NOT NULL DEFAULT '',      -- Need04: 冗余维度键，非空约束
     FOREIGN KEY (assembly_id) REFERENCES assemblies(id),
     FOREIGN KEY (module_id) REFERENCES modules(id)
 );
 
 -- ------------------------------------------------------------
--- templates — 模板表（预留）
+-- templates — 模板表
 -- ------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS templates (
     id                TEXT PRIMARY KEY,
     name              TEXT NOT NULL,
     description       TEXT,
-    config_json       TEXT,                         -- 维度开关+权重+规则快照 JSON
+    config_json       TEXT,                         -- 仅存 assembly_config + enabled_dimension_keys + version
     cover_prompt      TEXT,
     created_at        INTEGER NOT NULL,
     is_deleted        INTEGER NOT NULL DEFAULT 0
+);
+
+-- ------------------------------------------------------------
+-- template_items — 模板明细表（Need04 破坏性新增，与 assembly_items 对称）
+-- ------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS template_items (
+    id                TEXT PRIMARY KEY,
+    template_id       TEXT NOT NULL REFERENCES templates(id) ON DELETE CASCADE,
+    module_id         TEXT NOT NULL REFERENCES modules(id),
+    dimension_key     TEXT NOT NULL,                -- 非空约束，与 assembly_items.dimension_key 同源
+    sort_order        INTEGER NOT NULL DEFAULT 0,
+    weight_override   REAL,
+    is_locked         INTEGER NOT NULL DEFAULT 0
 );
 
 -- ------------------------------------------------------------
@@ -144,6 +158,9 @@ CREATE INDEX IF NOT EXISTS idx_modules_nsfw
 
 CREATE INDEX IF NOT EXISTS idx_assembly_items_assembly
     ON assembly_items(assembly_id);
+
+CREATE INDEX IF NOT EXISTS idx_template_items_template
+    ON template_items(template_id);
 
 CREATE INDEX IF NOT EXISTS idx_rules_source_dim
     ON rules(source_dimension_id) WHERE is_deleted = 0;

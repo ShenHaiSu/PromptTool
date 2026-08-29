@@ -235,13 +235,13 @@ fn create_business_file(path: &Path, app: &AppHandle, with_seed: bool) -> Result
             .map_err(|e| e.to_string())?;
     }
     super::migration::migrate_if_needed(&conn)?;
+    // Need04破坏性补充：老库可能缺 assembly_items.dimension_key 与 template_items，ensure_business_compatible 已调用 migrate_if_needed，此处亦兜底
     super::migration::ensure_dimensions(&conn)?;
     if with_seed {
         let _ = super::migration::import_sample_prompts(&conn, app);
         let _ = super::migration::mark_nsfw_modules(&conn);
         let _ = super::migration::disable_deprecated_gender(&conn);
     }
-    // Ensure rules exist even without seed
     super::migration::seed_rules_if_empty(&conn)?;
     Ok(())
 }
