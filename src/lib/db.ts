@@ -486,6 +486,71 @@ export async function dbImportSegmentsText(
 ): Promise<SegmentImportReport> {
   return invoke<SegmentImportReport>('db_import_segments_text', { text, unassignedStrategy, mode })
 }
+
+// ------------------------------------------------------------------
+// Need01 — 同维度按回车批量新增
+// ------------------------------------------------------------------
+export type BatchCreateItem = {
+  contentEn: string
+  displayName?: string | null
+  weight?: number | null
+  isNsfw?: boolean
+  notes?: string | null
+}
+
+export type BatchCreatePayload = {
+  dimId: string
+  items: BatchCreateItem[]
+  mode: ImportMode
+  weight?: number | null
+  isNsfw?: boolean
+}
+
+export type BatchCreateReport = {
+  totalRequested: number
+  valid: number
+  modulesCreated: number
+  modulesUpdated: number
+  modulesSkipped: number
+  emptyIgnored: number
+  duplicateInBatch: number
+  truncated: number
+  errors: string[]
+  warnings: string[]
+}
+
+export async function dbBatchCreateModules(payload: BatchCreatePayload): Promise<BatchCreateReport> {
+  return invoke<BatchCreateReport>('db_batch_create_modules', {
+    dimId: payload.dimId,
+    items: payload.items.map((i) => ({
+      contentEn: i.contentEn,
+      displayName: i.displayName ?? null,
+      weight: i.weight ?? null,
+      isNsfw: i.isNsfw ?? null,
+      notes: i.notes ?? null,
+    })),
+    mode: payload.mode,
+    weight: payload.weight ?? null,
+    isNsfw: payload.isNsfw ?? null,
+  })
+}
+
+export async function dbBatchCreateModulesText(
+  dimId: string,
+  text: string,
+  mode: ImportMode,
+  weight?: number | null,
+  isNsfw?: boolean,
+): Promise<BatchCreateReport> {
+  return invoke<BatchCreateReport>('db_batch_create_modules_text', {
+    dimId,
+    text,
+    mode,
+    weight: weight ?? null,
+    isNsfw: isNsfw ?? null,
+  })
+}
+
 // ------------------------------------------------------------------
 // Need04 — 多分区数据库（Default 元库 + 业务库）
 // ------------------------------------------------------------------

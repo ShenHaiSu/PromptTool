@@ -12,6 +12,7 @@ import {
 } from '@/lib/db'
 import DimensionEditDialog from '@/components/DimensionEditDialog.vue'
 import ModuleEditDialog from '@/components/ModuleEditDialog.vue'
+import ModuleBatchDialog from '@/components/ModuleBatchDialog.vue'
 import { useToast } from '@/composables/useToast'
 import { emit, LIBRARY_CHANGED } from '@/lib/libraryEvents'
 import type { Dimension, Module } from '@/engine/models'
@@ -36,6 +37,9 @@ const showModuleDialog = ref(false)
 const moduleDialogMode = ref<'create' | 'edit'>('create')
 const editingModule = ref<Module | null>(null)
 const newModuleDimId = ref<string | null>(null)
+
+const showBatchDialog = ref(false)
+const batchDimension = ref<Dimension | null>(null)
 
 const nsfwCount = computed(() => {
   let c = 0
@@ -167,6 +171,23 @@ async function onModuleConfirm(payload: { dimensionId: string; contentEn: string
   }
 }
 
+function onBatchCreate(dim: Dimension): void {
+  batchDimension.value = dim
+  showBatchDialog.value = true
+}
+
+async function onBatchImported(): Promise<void> {
+  await refresh()
+  emit(LIBRARY_CHANGED, { source: 'dimension-panel', op: 'batch-create-modules' })
+  if (batchDimension.value) {
+    const key = batchDimension.value.key
+    if (!expandedKeys.value.has(key)) {
+      expandedKeys.value = new Set([...expandedKeys.value, key])
+    }
+  }
+  push(`批量创建完成`, 'success', 1500)
+}
+
 async function onDeleteModule(m: Module): Promise<void> {
   if (!confirm(`确定删除词条「${m.displayName}」？`)) return
   try {
@@ -283,6 +304,12 @@ defineExpose({ refresh, keyword, allowNsfw, dimensions, modulesByDim, onCreateDi
                   @click.stop="onCreateModule(dim.id)"
                 >+</button>
                 <button
+                  :data-testid="`dim-batch-module-${dim.key}`"
+                  class="rounded px-1.5 py-0.5 text-[11px] text-muted-foreground hover:bg-accent hover:text-foreground"
+                  title="批量新增（同维度按行）"
+                  @click.stop="onBatchCreate(dim)"
+                >批量</button>
+                <button
                   :data-testid="`dim-edit-${dim.key}`"
                   class="rounded px-1 text-xs text-muted-foreground hover:bg-accent hover:text-foreground"
                   title="编辑维度"
@@ -348,6 +375,14 @@ defineExpose({ refresh, keyword, allowNsfw, dimensions, modulesByDim, onCreateDi
       :initial-dimension-id="newModuleDimId"
       :initial-module="editingModule"
       @confirm="onModuleConfirm"
+    />
+
+    <!-- 批量新增弹窗（Need01） -->
+    <ModuleBatchDialog
+      :open="showBatchDialog"
+      :dimension="batchDimension"
+      @update:open="showBatchDialog = $event"
+      @imported="onBatchImported"
     />
   </section>
 </template>

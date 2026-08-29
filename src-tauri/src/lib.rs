@@ -76,6 +76,8 @@ pub fn run() {
             commands::db::db_import_library_text,
             commands::segment::db_import_segments,
             commands::segment::db_import_segments_text,
+            commands::batch::db_batch_create_modules,
+            commands::batch::db_batch_create_modules_text,
             commands::migration::db_import_legacy_db,
             commands::meta::db_get_active_info,
             commands::meta::db_list_registry,
