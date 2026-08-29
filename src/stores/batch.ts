@@ -3,6 +3,7 @@ import { ref } from 'vue'
 import { randomAssembly, partialRandomAssembly } from '@/engine/random'
 import { adaptToModel } from '@/engine/adapters'
 import type { AssemblyConfig, BatchCardModel, Dimension, Module, SelectedItem } from '@/engine/models'
+import { useRandomHistoryStore } from '@/stores/randomHistory'
 
 export const useBatchStore = defineStore('batch', () => {
   const results = ref<BatchCardModel[]>([])
@@ -18,7 +19,9 @@ export const useBatchStore = defineStore('batch', () => {
   ) {
     isGenerating.value = true
     try {
-      const irs = randomAssembly(dimensions, modulesByDim, lockedIds, count, config, allowNsfw)
+      const historyStore = useRandomHistoryStore()
+      const irs = randomAssembly(dimensions, modulesByDim, lockedIds, count, config, allowNsfw, historyStore.state)
+      if (irs.length > 0) historyStore.persist()
       results.value = irs.map((ir, idx) => ({
         index: idx + 1,
         ir,
@@ -42,7 +45,9 @@ export const useBatchStore = defineStore('batch', () => {
   ) {
     isGenerating.value = true
     try {
-      const irs = partialRandomAssembly(dimensions, modulesByDim, anchored, count, config, allowNsfw)
+      const historyStore = useRandomHistoryStore()
+      const irs = partialRandomAssembly(dimensions, modulesByDim, anchored, count, config, allowNsfw, historyStore.state)
+      if (irs.length > 0) historyStore.persist()
       results.value = irs.map((ir, idx) => ({
         index: idx + 1,
         ir,
@@ -64,5 +69,10 @@ export const useBatchStore = defineStore('batch', () => {
     results.value = next
   }
 
-  return { results, isGenerating, generate, generatePartial, clear, updateBatch }
+  function clearHistory(): void {
+    const historyStore = useRandomHistoryStore()
+    historyStore.clear()
+  }
+
+  return { results, isGenerating, generate, generatePartial, clear, updateBatch, clearHistory }
 })

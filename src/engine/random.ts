@@ -6,6 +6,16 @@ import { assemble } from './assembly'
 import { applyRules } from './rules'
 import type { AssemblyConfig, Dimension, Module, SelectedItem } from './models'
 import { PromptIR } from './models'
+import {
+  MAX_ATTEMPTS_FACTOR,
+  buildScopeKey,
+  effectiveWeightsForPool,
+  isInWindow,
+  pushToWindow,
+  recordHit,
+  maybeDecay,
+  type RandomHistoryState,
+} from './randomHistory'
 
 export function weightedSample<T>(pool: T[], weights: number[], k: number): T[] {
   if (pool.length === 0 || k <= 0) return []
@@ -31,10 +41,15 @@ export function randomAssembly(
   count: number,
   config: AssemblyConfig,
   allowNsfw = false,
+  history?: RandomHistoryState,
 ): PromptIR[] {
+  const enabledDimKeys = dimensions.filter((d) => d.isEnabled).map((d) => d.key)
+  const scopeKey = history
+    ? buildScopeKey({ lockedIds: lockedModuleIds, enabledDimKeys, allowNsfw, mode: 'random' })
+    : ''
   const results: PromptIR[] = []
   const seen = new Set<string>()
-  const maxAttempts = count * 10
+  const maxAttempts = count * MAX_ATTEMPTS_FACTOR
   let attempts = 0
 
   while (results.length < count && attempts < maxAttempts) {
@@ -59,7 +74,7 @@ export function randomAssembly(
       else n = 1
       if (n === 0) continue
 
-      const weights = pool.map((m) => m.weight)
+      const weights = history ? effectiveWeightsForPool(pool, history.hits) : pool.map((m) => m.weight)
       const sampled = weightedSample(pool, weights, n)
       for (const m of sampled) picked.push({ module: m, locked: false })
     }
@@ -67,8 +82,17 @@ export function randomAssembly(
     if (picked.length === 0) continue
     const { ir } = assemble(picked, config)
     const h = ir.hash()
-    if (!seen.has(h)) { seen.add(h); results.push(ir) }
+    if (history && isInWindow(h, scopeKey, history.recentByScope)) continue
+    if (seen.has(h)) continue
+    seen.add(h)
+    results.push(ir)
+    if (history) {
+      recordHit(history, ir)
+      pushToWindow(h, scopeKey, history)
+    }
   }
+
+  if (history) maybeDecay(history)
 
   return results
 }
@@ -80,14 +104,15 @@ export function partialRandomAssembly(
   count: number,
   config: AssemblyConfig,
   allowNsfw = false,
+  history?: RandomHistoryState,
 ): PromptIR[] {
   if (anchoredItems.length === 0) {
-    return randomAssembly(dimensions, modulesByDim, new Set(), count, config, allowNsfw)
+    return randomAssembly(dimensions, modulesByDim, new Set(), count, config, allowNsfw, history)
   }
 
   const [cleanAnchor] = applyRules([...anchoredItems])
   if (cleanAnchor.length === 0) {
-    return randomAssembly(dimensions, modulesByDim, new Set(), count, config, allowNsfw)
+    return randomAssembly(dimensions, modulesByDim, new Set(), count, config, allowNsfw, history)
   }
 
   const anchorDimKeys = new Set(
@@ -101,9 +126,15 @@ export function partialRandomAssembly(
     (d) => d.isEnabled && !anchorDimKeys.has(d.key) && !forbiddenDims.has(d.key) && (modulesByDim[d.key]?.length ?? 0) > 0,
   )
 
+  const anchoredIds = cleanAnchor.map((it) => it.module.id)
+  const enabledDimKeys = dimensions.filter((d) => d.isEnabled).map((d) => d.key)
+  const scopeKey = history
+    ? buildScopeKey({ anchoredIds, enabledDimKeys, allowNsfw, mode: 'partial' })
+    : ''
+
   const results: PromptIR[] = []
   const seen = new Set<string>()
-  const maxAttempts = count * 10
+  const maxAttempts = count * MAX_ATTEMPTS_FACTOR
   let attempts = 0
 
   while (results.length < count && attempts < maxAttempts) {
@@ -125,7 +156,7 @@ export function partialRandomAssembly(
         else n = Math.floor(Math.random() * (Math.min(2, pool.length) + 1))
       } else n = 1
       if (n === 0) continue
-      const weights = pool.map((m) => m.weight)
+      const weights = history ? effectiveWeightsForPool(pool, history.hits) : pool.map((m) => m.weight)
       const sampled = weightedSample(pool, weights, n)
       for (const m of sampled) picked.push({ module: m, locked: false })
     }
@@ -133,8 +164,17 @@ export function partialRandomAssembly(
     if (picked.length === 0) continue
     const { ir } = assemble(picked, config)
     const h = ir.hash()
-    if (!seen.has(h)) { seen.add(h); results.push(ir) }
+    if (history && isInWindow(h, scopeKey, history.recentByScope)) continue
+    if (seen.has(h)) continue
+    seen.add(h)
+    results.push(ir)
+    if (history) {
+      recordHit(history, ir)
+      pushToWindow(h, scopeKey, history)
+    }
   }
+
+  if (history) maybeDecay(history)
 
   return results
 }
