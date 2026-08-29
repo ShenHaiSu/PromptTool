@@ -13,6 +13,7 @@ import {
 import DimensionEditDialog from '@/components/DimensionEditDialog.vue'
 import ModuleEditDialog from '@/components/ModuleEditDialog.vue'
 import { useToast } from '@/composables/useToast'
+import { emit, LIBRARY_CHANGED } from '@/lib/libraryEvents'
 import type { Dimension, Module } from '@/engine/models'
 
 const assembly = useAssemblyStore()
@@ -114,6 +115,7 @@ async function onDimConfirm(payload: { key: string; nameCn: string; nameEn: stri
       push('维度已更新', 'success', 1500)
     }
     await refresh()
+    emit(LIBRARY_CHANGED, { source: 'dimension-panel', op: dimDialogMode.value === 'create' ? 'create-dimension' : 'update-dimension' })
   } catch (e) {
     push(`操作失败: ${String(e)}`, 'error')
   }
@@ -138,9 +140,7 @@ async function onModuleConfirm(payload: { dimensionId: string; contentEn: string
   try {
     if (moduleDialogMode.value === 'create') {
       await dbCreateModule(payload.dimensionId, payload.contentEn, payload.displayName, payload.weight)
-      // dbCreateModule 仅支持 displayName/weight，额外字段通过 dbUpdateModule 补充（如 isNsfw/notes 与初始值不同）
       if (payload.isNsfw || payload.notes) {
-        // 尝试通过搜索定位刚创建的条目并补充字段
         const grouped = await dbGetAllModulesGrouped()
         const all = Object.values(grouped).flat()
         const created = all.find((x) => x.contentEn === payload.contentEn && x.dimensionId === payload.dimensionId)
@@ -161,6 +161,7 @@ async function onModuleConfirm(payload: { dimensionId: string; contentEn: string
       push('词条已更新', 'success', 1500)
     }
     await refresh()
+    emit(LIBRARY_CHANGED, { source: 'dimension-panel', op: moduleDialogMode.value === 'create' ? 'create-module' : 'update-module' })
   } catch (e) {
     push(`操作失败: ${String(e)}`, 'error')
   }
@@ -172,6 +173,7 @@ async function onDeleteModule(m: Module): Promise<void> {
     await dbSoftDeleteModule(m.id)
     push('词条已删除', 'success', 1500)
     await refresh()
+    emit(LIBRARY_CHANGED, { source: 'dimension-panel', op: 'delete-module' })
   } catch (e) {
     push(`删除失败: ${String(e)}`, 'error')
   }

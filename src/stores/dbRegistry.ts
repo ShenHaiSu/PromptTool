@@ -16,6 +16,7 @@ import {
   type ActiveInfo,
 } from '@/lib/db'
 import { useAssemblyStore } from '@/stores/assembly'
+import { emit, LIBRARY_CHANGED } from '@/lib/libraryEvents'
 
 export type { RegistryRow, ActiveInfo }
 
@@ -53,6 +54,7 @@ export const useDbRegistryStore = defineStore('dbRegistry', () => {
       }
     }
     await dbSwitchActive(path)
+    try { emit(LIBRARY_CHANGED, { source: 'dbRegistry', op: 'switchActive', path }) } catch { /* ignore */ }
     window.location.reload()
   }
 
@@ -77,6 +79,7 @@ export const useDbRegistryStore = defineStore('dbRegistry', () => {
       } catch {}
     }
     await dbCreateBusiness(args)
+    try { emit(LIBRARY_CHANGED, { source: 'dbRegistry', op: 'createBusiness', path: args.path }) } catch { /* ignore */ }
     window.location.reload()
   }
 
@@ -84,17 +87,20 @@ export const useDbRegistryStore = defineStore('dbRegistry', () => {
     await dbRepairPath(oldPath, newPath)
     await fetchList()
     await fetchActiveInfo()
+    try { emit(LIBRARY_CHANGED, { source: 'dbRegistry', op: 'repairPath' }) } catch { /* ignore */ }
   }
 
   async function rebuildMissing(path: string, withSeed: boolean): Promise<void> {
     await dbRebuildMissing(path, withSeed)
     await fetchList()
     await fetchActiveInfo()
+    try { emit(LIBRARY_CHANGED, { source: 'dbRegistry', op: 'rebuildMissing', path }) } catch { /* ignore */ }
   }
 
   async function removeRegistry(path: string): Promise<{ wasForeground: boolean; nextForeground: string | null }> {
     const res = await dbRemoveRegistry(path)
     if (res.wasForeground) {
+      try { emit(LIBRARY_CHANGED, { source: 'dbRegistry', op: 'removeRegistry', path }) } catch { /* ignore */ }
       window.location.reload()
     } else {
       await fetchList()

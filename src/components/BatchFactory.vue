@@ -1,17 +1,18 @@
 <script setup lang="ts">
-import { ref, computed, watch, nextTick } from 'vue'
+import { ref, computed, watch, nextTick, onMounted, onBeforeUnmount } from 'vue'
 import { Button } from '@/components/ui/button'
 import BatchCard from '@/components/BatchCard.vue'
 import { useBatchStore } from '@/stores/batch'
 import { useAssemblyStore } from '@/stores/assembly'
+import { useLibraryStore } from '@/stores/library'
 import { useToast } from '@/composables/useToast'
 import { exportBatchCsv } from '@/lib/export'
 import { useVirtualizer } from '@tanstack/vue-virtual'
-import { dbGetDimensions, dbGetAllModulesGrouped } from '@/lib/db'
-import type { Dimension, Module } from '@/engine/models'
+import { on, off, LIBRARY_CHANGED } from '@/lib/libraryEvents'
 
 const batch = useBatchStore()
 const assembly = useAssemblyStore()
+const library = useLibraryStore()
 const { push } = useToast()
 
 // 控制行状态
@@ -19,22 +20,34 @@ const count = ref<number>(20)
 const allowNsfw = ref(false)
 const usePartial = ref(false)
 
-// 维度/模块缓存（批量生成所需；与 DimensionPanel 共享数据源，本地懒加载）
-const dimensions = ref<Dimension[]>([])
-const modulesByDim = ref<Record<string, Module[]>>({})
-const loadingDims = ref(false)
+const loadingDims = computed(() => library.loading)
+
+async function refreshDims(): Promise<void> {
+  await library.fetchAll()
+}
 
 async function ensureDims(): Promise<void> {
-  if (dimensions.value.length) return
-  loadingDims.value = true
-  try {
-    dimensions.value = await dbGetDimensions()
-    try {
-      modulesByDim.value = await dbGetAllModulesGrouped()
-    } catch { modulesByDim.value = {} }
-  } catch { /* jsdom 无 Tauri 时降级 */ }
-  finally { loadingDims.value = false }
+  // P0 热修复：不再 early-return，每次按需保证新鲜度由调用方决定
+  // 兼容旧路径：若尚未加载则拉取一次
+  if (library.dimensions.length === 0) {
+    await library.fetchAll()
+  }
 }
+
+function onLibraryChanged(): void {
+  // P1 事件同步：写后由 libraryStore 决策立即或防抖刷新
+  library.scheduleFetch()
+}
+
+onMounted(() => {
+  on(LIBRARY_CHANGED, onLibraryChanged)
+  // 首帧若 library 尚未加载，触发一次加载
+  if (library.dimensions.length === 0) void library.fetchAll()
+})
+
+onBeforeUnmount(() => {
+  off(LIBRARY_CHANGED, onLibraryChanged)
+})
 
 function clampCount(v: number): number {
   if (!Number.isFinite(v)) return 20
@@ -47,13 +60,17 @@ function onCountInput(e: Event): void {
 }
 
 async function onRandom(): Promise<void> {
+  // P0+P3：点击随机不受防抖约束，强制实时拉取
+  await library.ensureFreshForRandom()
+  // 兜底：确保至少有一次加载
   await ensureDims()
   const cfg = assembly.config
+  const dims = library.dimensions
+  const grouped = library.modulesByDim
   if (usePartial.value && assembly.selectedItems.length > 0) {
-    // 可控部分随机：以 assembly.selectedItems 为锚点
     batch.generatePartial(
-      dimensions.value,
-      modulesByDim.value,
+      dims,
+      grouped,
       assembly.selectedItems,
       count.value,
       cfg,
@@ -62,10 +79,9 @@ async function onRandom(): Promise<void> {
     push(`已生成 ${batch.results.length} 条（可控）`, 'success', 1600)
   } else {
     const lockedIds = new Set(assembly.selectedItems.filter((it) => it.locked).map((it) => it.module.id))
-    batch.generate(dimensions.value, modulesByDim.value, lockedIds, count.value, cfg, allowNsfw.value)
+    batch.generate(dims, grouped, lockedIds, count.value, cfg, allowNsfw.value)
     push(`已生成 ${batch.results.length} 条`, 'success', 1600)
   }
-  // 生成后 virtualizer 需重算
   await nextTick()
 }
 
@@ -93,7 +109,6 @@ function onExportCsv(): void {
     push('暂无可导出内容', 'warning')
     return
   }
-  // 阶段六：复用 export.ts 对标 exporter.py 的 列 序号/提示词/维度构成/冲突警告
   exportBatchCsv(batch.results as unknown as Array<{ finalPrompt: string; warnings: string[]; ir: import('@/engine/models').PromptIR }>)
   push('已导出 CSV', 'success', 1500)
 }
@@ -115,15 +130,15 @@ const virtualizer = useVirtualizer(
 const virtualItems = computed(() => virtualizer.value.getVirtualItems())
 const totalSize = computed(() => virtualizer.value.getTotalSize())
 
-// 动态测量：将真实渲染的包裹层元素交给 virtualizer 校正行高，避免固定估计值导致卡片重叠
 const measureRow = (el: unknown) => {
   if (el instanceof HTMLElement) virtualizer.value.measureElement(el as any)
 }
 
-// 当 results 变化时，确保 virtualizer 重算（getVirtualItems 会在滚动时更新）
 watch(totalCount, async () => {
   await nextTick()
 })
+
+defineExpose({ refresh: refreshDims })
 </script>
 
 <template>
@@ -152,7 +167,7 @@ watch(totalCount, async () => {
           data-testid="batch-random-btn"
           size="sm"
           class="h-7 text-xs"
-          :disabled="loadingDims && dimensions.length === 0"
+          :disabled="loadingDims && library.dimensions.length === 0"
           @click="onRandom"
           >{{ usePartial ? '可控随机' : '随机生成' }}</Button
         >
@@ -178,6 +193,7 @@ watch(totalCount, async () => {
           >
         </div>
       </div>
+      <div v-if="library.dirty && library.total > 200" class="text-[11px] text-muted-foreground">词库已变更，10 秒内自动同步 · 随机按钮不受影响</div>
     </div>
 
     <!-- 虚拟化 Card 流 -->
