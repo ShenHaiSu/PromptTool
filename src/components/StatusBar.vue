@@ -3,6 +3,7 @@ import { Button } from '@/components/ui/button'
 import { useThemeStore } from '@/stores/theme'
 import { useAssemblyStore } from '@/stores/assembly'
 import { useHistoryStore } from '@/stores/history'
+import { useLibraryStore } from '@/stores/library'
 
 defineProps<{
   dimCount: number
@@ -14,6 +15,7 @@ const emit = defineEmits<{ (e: 'toggle-library'): void; (e: 'toggle-segment-impo
 const theme = useThemeStore()
 const assembly = useAssemblyStore()
 const history = useHistoryStore()
+const library = useLibraryStore()
 </script>
 
 <template>
@@ -24,6 +26,8 @@ const history = useHistoryStore()
     <div class="flex items-center gap-3">
       <span data-testid="status-dimensions">维度: {{ dimCount || 14 }}</span>
       <span data-testid="status-modules">条目: {{ moduleCount || 311 }}</span>
+      <span v-if="library.dirty && library.total > 200" data-testid="status-sync-hint" class="text-amber-600">· 10秒内同步</span>
+      <span v-else-if="library.syncing" data-testid="status-syncing" class="text-muted-foreground">· 同步中…</span>
       <span data-testid="status-selected">已选: {{ assembly.selectedItems.length }}</span>
       <span data-testid="status-history">历史: {{ history.recent.length }}</span>
       <span data-testid="status-favorites">收藏: {{ history.favorites.length }}</span>

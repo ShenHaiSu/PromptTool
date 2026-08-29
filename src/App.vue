@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted, onBeforeUnmount, computed } from 'vue'
+import { ref, onMounted, onBeforeUnmount, computed, watch } from 'vue'
 import TopBar from '@/components/TopBar.vue'
 import DimensionPanel from '@/components/DimensionPanel.vue'
 import BatchFactory from '@/components/BatchFactory.vue'
@@ -17,19 +17,19 @@ import { useThemeStore } from '@/stores/theme'
 import BusinessDbOnboardingDialog from '@/components/BusinessDbOnboardingDialog.vue'
 import DbManagerDrawer from '@/components/DbManagerDrawer.vue'
 import { useDbRegistryStore } from '@/stores/dbRegistry'
+import { useLibraryStore } from '@/stores/library'
 import { dbGetDimensions, dbGetAllModulesGrouped, dbGetTempCarry } from '@/lib/db'
+import { on as onEvent, off as offEvent, LIBRARY_CHANGED } from '@/lib/libraryEvents'
 
 const assembly = useAssemblyStore()
 const historyStore = useHistoryStore()
 const dbRegistry = useDbRegistryStore()
 const themeStore = useThemeStore()
-void themeStore.mode // 触发 theme 初始化副作用（已在 store 构造时 applyTheme）
+const library = useLibraryStore()
+void themeStore.mode
 const { leftFrac, centerFrac, setFracs } = useSash()
 const { push } = useToast()
 
-// ------------------------------------------------------------------
-// 快捷键：Ctrl+F 聚焦搜索 / Ctrl+S 保存 / Ctrl+C 复制 / Delete 删除末项
-// ------------------------------------------------------------------
 function focusSearch(): void {
   const el = document.querySelector<HTMLInputElement>('[data-testid="dimension-search"]')
   el?.focus()
@@ -68,23 +68,38 @@ function doRemoveShortcut(): void {
 
 useShortcuts({ focusSearch, save: doSaveShortcut, copy: doCopyShortcut, remove: doRemoveShortcut })
 
-// Stats for StatusBar — best effort, jsdom 无 Tauri 时回退 14/311
 const dimCount = ref(0)
 const moduleCount = ref(0)
 
-// 词库管理对话框
 const showDbManager = ref(false)
 
 const showLibraryDialog = ref(false)
 const showSegmentImport = ref(false)
 const dimensionPanelRef = ref<{ refresh: () => Promise<void> } | null>(null)
+const batchFactoryRef = ref<{ refresh: () => Promise<void> } | null>(null)
+
+function syncCountsFromLibrary(): void {
+  if (library.dimensions.length) dimCount.value = library.dimensions.length
+  if (library.total) moduleCount.value = library.total
+}
+
+function handleLibraryChanged(): void {
+  // P1/P3：任意写后，状态栏计数随 library 同步；BatchFactory 已通过事件自行 scheduleFetch，
+  // 此处额外确保左侧面板在非 DimensionPanel 触发的场景（如导入、切库）也能刷新
+  void dimensionPanelRef.value?.refresh()
+  // library 的 scheduleFetch 已由 BatchFactory 监听触发；此处再调度一次以确保计数同步（幂等）
+  library.scheduleFetch()
+}
+
+watch(() => library.total, () => { syncCountsFromLibrary() })
+watch(() => library.dimensions.length, () => { syncCountsFromLibrary() })
+
 function toggleLibrary(): void {
   showLibraryDialog.value = !showLibraryDialog.value
 }
 function toggleSegmentImport(): void {
   showSegmentImport.value = !showSegmentImport.value
 }
-/** 导入完成后刷新维度/词条统计，并刷新左侧词条面板 */
 async function refreshStats(): Promise<void> {
   try {
     const dims = await dbGetDimensions()
@@ -96,6 +111,10 @@ async function refreshStats(): Promise<void> {
       moduleCount.value = total
     } catch { /* ignore */ }
     await dimensionPanelRef.value?.refresh()
+    await batchFactoryRef.value?.refresh()
+    // 同步 library store，避免与直接拉取的状态分叉
+    await library.fetchAll()
+    syncCountsFromLibrary()
   } catch { /* ignore */ }
 }
 
@@ -158,7 +177,8 @@ onMounted(async () => {
     persistGeometry()
   } catch { /* ignore */ }
 
-  // Need04首帧守卫
+  onEvent(LIBRARY_CHANGED, handleLibraryChanged)
+
   try {
     await dbRegistry.fetchActiveInfo()
     await dbRegistry.fetchList()
@@ -179,7 +199,8 @@ onMounted(async () => {
       let total = 0
       for (const v of Object.values(grouped)) total += (v as unknown[]).length
       moduleCount.value = total
-      // 恢复 temp_carry
+      //  priming library store with the same snapshot
+      try { await library.fetchAll(); syncCountsFromLibrary() } catch { /* ignore */ }
       try {
         const carry = await dbGetTempCarry()
         if (carry && carry.selectedItemIds?.length) {
@@ -205,7 +226,8 @@ onMounted(async () => {
 })
 
 onBeforeUnmount(() => {
-  // beforeunload 已由 usePersist 托管
+  offEvent(LIBRARY_CHANGED, handleLibraryChanged)
+  library.dispose()
 })
 </script>
 
@@ -263,7 +285,7 @@ onBeforeUnmount(() => {
         data-testid="panel-right"
         class="flex min-h-0 flex-1 flex-col overflow-hidden bg-card"
       >
-        <BatchFactory />
+        <BatchFactory ref="batchFactoryRef" />
         <HistoryPanel />
       </section>
     </div>
@@ -286,7 +308,6 @@ onBeforeUnmount(() => {
       @imported="refreshStats"
     />
 
-    <!-- Toast 队列：最多 5 条并发，溢出丢弃最旧 -->
     <div data-testid="toasts" class="pointer-events-none fixed bottom-10 right-4 z-50 flex flex-col gap-2">
       <div
         v-for="t in appToasts.slice(-5)"
