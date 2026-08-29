@@ -31,3 +31,34 @@ describe('batch store', () => {
     expect(s.results).toHaveLength(0)
   })
 })
+
+describe('batch store history persistence (need03)', () => {
+  it('generate persists history to localStorage', () => {
+    localStorage.clear()
+    const s = useBatchStore()
+    const dimensions = [dim('top', 0), dim('bottom', 1)]
+    const grouped: Record<string, Module[]> = {
+      top: [mod('m1', 'top', 'white shirt'), mod('m1b', 'top', 'black shirt')],
+      bottom: [mod('m2', 'bottom', 'pleated skirt')],
+    }
+    s.generate(dimensions, grouped, new Set(), 1, { separator: ', ', useWeightBrackets: true, modelProfile: 'sd', sortBy: 'dimensionOrder' })
+    expect(s.results.length).toBeGreaterThan(0)
+    const raw = localStorage.getItem('pmf:randomHistory:v1')
+    expect(raw).not.toBeNull()
+    const parsed = JSON.parse(raw!)
+    expect(parsed.version).toBe(1)
+    expect(parsed.hits).toBeDefined()
+  })
+
+  it('clearHistory clears storage', () => {
+    localStorage.clear()
+    const s = useBatchStore()
+    const dimensions = [dim('top', 0)]
+    const grouped: Record<string, Module[]> = { top: [mod('m1', 'top', 'white shirt')] }
+    s.generate(dimensions, grouped, new Set(), 1, { separator: ', ', useWeightBrackets: true, modelProfile: 'sd', sortBy: 'dimensionOrder' })
+    expect(localStorage.getItem('pmf:randomHistory:v1')).not.toBeNull()
+    s.clearHistory()
+    expect(localStorage.getItem('pmf:randomHistory:v1')).toBeNull()
+  })
+})
+
