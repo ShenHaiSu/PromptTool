@@ -16,6 +16,86 @@ fn new_id() -> String {
     uuid::Uuid::new_v4().to_string()
 }
 
+fn safe_truncate(s: &str, max_chars: usize) -> String {
+    if s.chars().count() <= max_chars {
+        s.to_string()
+    } else {
+        s.chars().take(max_chars).collect()
+    }
+}
+
+fn short_title_from_prompt(final_prompt: &str, ts: i64) -> String {
+    let ymd = chrono::DateTime::<chrono::Utc>::from_timestamp(ts, 0)
+        .map(|d| d.format("%Y-%m-%d").to_string())
+        .unwrap_or_default();
+    let short = safe_truncate(final_prompt, 30);
+    let short = if final_prompt.chars().count() > 30 {
+        format!("{}...", short)
+    } else {
+        short
+    };
+    if short.is_empty() {
+        format!("{} · (空方案)", ymd)
+    } else {
+        format!("{} · {}", ymd, short)
+    }
+}
+
+fn resolve_module_with_fallback(
+    mid: &str,
+    content_en: Option<String>,
+    display_name: Option<String>,
+    mod_weight: Option<f64>,
+    dimension_id: Option<String>,
+    dim_key: Option<String>,
+    is_deleted: bool,
+    snapshot: Option<&(String, String, f64)>,
+    fallback_dk: Option<String>,
+) -> ModuleDto {
+    let snap_text = snapshot.map(|(t, _, _)| t.clone());
+    let snap_dk = snapshot.map(|(_, k, _)| k.clone());
+    let snap_w = snapshot.map(|(_, _, w)| *w);
+    if content_en.is_none() || is_deleted {
+        let text = snap_text.unwrap_or_else(|| {
+            let trunc = safe_truncate(mid, 8);
+            format!("[已失效:{}]", trunc)
+        });
+        let dk = snap_dk
+            .or(fallback_dk)
+            .or(dim_key.clone())
+            .unwrap_or_default();
+        let w = snap_w.unwrap_or(1.0);
+        let disp = format!("[已失效] {}", safe_truncate(&text, 20));
+        ModuleDto {
+            id: mid.to_string(),
+            dimension_id: dimension_id.unwrap_or_default(),
+            content_en: text,
+            display_name: disp,
+            weight: mod_weight.unwrap_or(w),
+            is_enabled: false,
+            is_nsfw: false,
+            usage_count: 0,
+            example_image: None,
+            notes: Some("[原条目已删除，已用快照占位]".to_string()),
+            dimension_key: Some(dk),
+        }
+    } else {
+        ModuleDto {
+            id: mid.to_string(),
+            dimension_id: dimension_id.unwrap_or_default(),
+            content_en: content_en.unwrap_or_default(),
+            display_name: display_name.unwrap_or_default(),
+            weight: mod_weight.unwrap_or(1.0),
+            is_enabled: true,
+            is_nsfw: false,
+            usage_count: 0,
+            example_image: None,
+            notes: None,
+            dimension_key: dim_key.clone(),
+        }
+    }
+}
+
 // ------------------------------------------------------------------
 // DTOs
 // ------------------------------------------------------------------
@@ -446,23 +526,17 @@ pub fn db_save_assembly(
     let aid = new_id();
     let ts = now_ts();
     let ttl = if title.as_deref().map(|s| s.trim().is_empty()).unwrap_or(true) {
-        let short = if final_prompt.len() > 30 {
-            format!("{}...", &final_prompt[..30])
-        } else {
-            final_prompt.clone()
-        };
-        let ymd = chrono::DateTime::<chrono::Utc>::from_timestamp(ts, 0)
-            .map(|d| d.format("%Y-%m-%d").to_string())
-            .unwrap_or_default();
-        if short.is_empty() {
-            format!("{} · (空方案)", ymd)
-        } else {
-            format!("{} · {}", ymd, short)
-        }
+        short_title_from_prompt(&final_prompt, ts)
     } else {
         title.unwrap()
     };
-    // Use transaction via batch
+    // Validate dimensionKey invariant for Need04
+    for it in &items {
+        let dk = it.module.dimension_key.as_deref().unwrap_or("");
+        if dk.trim().is_empty() {
+            return Err(format!("assembly item 缺少 dimensionKey: moduleId={}", it.module.id));
+        }
+    }
     conn.execute("BEGIN IMMEDIATE", []).map_err(|e| e.to_string())?;
     let res: Result<(), String> = (|| {
         conn.execute(
@@ -471,15 +545,17 @@ pub fn db_save_assembly(
         )
         .map_err(|e| e.to_string())?;
         for (idx, it) in items.iter().enumerate() {
+            let dk = it.module.dimension_key.clone().unwrap_or_default();
             conn.execute(
-                "INSERT INTO assembly_items (id, assembly_id, module_id, sort_order, weight_override, is_locked) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                "INSERT INTO assembly_items (id, assembly_id, module_id, sort_order, weight_override, is_locked, dimension_key) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
                 params![
                     new_id(),
                     aid,
                     it.module.id,
                     idx as i64,
                     it.weight_override,
-                    if it.locked { 1 } else { 0 }
+                    if it.locked { 1 } else { 0 },
+                    dk
                 ],
             )
             .map_err(|e| e.to_string())?;
@@ -509,34 +585,37 @@ pub fn db_save_assembly_from_ir(
     let conn = open_conn(&app)?;
     let aid = new_id();
     let ts = now_ts();
-    let short = if final_prompt.len() > 30 {
-        format!("{}...", &final_prompt[..30])
-    } else {
-        final_prompt.clone()
-    };
-    let ymd = chrono::DateTime::<chrono::Utc>::from_timestamp(ts, 0)
-        .map(|d| d.format("%Y-%m-%d").to_string())
-        .unwrap_or_default();
-    let title = if short.is_empty() {
-        format!("{} · (空方案)", ymd)
-    } else {
-        format!("{} · {}", ymd, short)
-    };
-    // Parse ir_json to extract segments for assembly_items
-    let segs: Vec<(String, f64)> = serde_json::from_str::<serde_json::Value>(&ir_json)
-        .ok()
-        .and_then(|v| v.get("segments").cloned())
-        .and_then(|s| serde_json::from_value::<Vec<serde_json::Value>>(s).ok())
-        .map(|arr| {
-            arr.into_iter()
-                .map(|seg| {
-                    let mid = seg.get("source_module_id").and_then(|v| v.as_str()).unwrap_or("").to_string();
-                    let w = seg.get("weight").and_then(|v| v.as_f64()).unwrap_or(1.0);
-                    (mid, w)
-                })
-                .collect()
-        })
-        .unwrap_or_default();
+    let title = short_title_from_prompt(&final_prompt, ts);
+    // Need04 破坏性：唯一口径 camelCase DTO，缺失/空 dimensionKey 或 sourceModuleId 直接报错
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    #[allow(non_snake_case)]
+    struct IrSegmentDto {
+        dimensionKey: String,
+        text: String,
+        weight: f64,
+        sourceModuleId: String,
+    }
+    #[derive(Deserialize)]
+    #[allow(dead_code)]
+    struct IrDto {
+        segments: Vec<IrSegmentDto>,
+        warnings: Vec<String>,
+    }
+    let ir: IrDto = serde_json::from_str(&ir_json).map_err(|e| format!("prompt_ir 解析失败: {}", e))?;
+    for seg in &ir.segments {
+        if seg.dimensionKey.trim().is_empty() {
+            return Err(format!("segment 缺少 dimensionKey: text={}", seg.text));
+        }
+        if seg.sourceModuleId.trim().is_empty() {
+            return Err(format!("segment 缺少 sourceModuleId: text={}", seg.text));
+        }
+    }
+    let segs: Vec<(String, f64, String)> = ir
+        .segments
+        .into_iter()
+        .map(|s| (s.sourceModuleId, s.weight, s.dimensionKey))
+        .collect();
 
     conn.execute("BEGIN IMMEDIATE", []).map_err(|e| e.to_string())?;
     let res: Result<(), String> = (|| {
@@ -545,20 +624,14 @@ pub fn db_save_assembly_from_ir(
             params![aid, title, ir_json, final_prompt, config.model_profile, ts, if is_favorite { 1 } else { 0 }],
         )
         .map_err(|e| e.to_string())?;
-        for (idx, (mid, w)) in segs.iter().enumerate() {
-            if mid.is_empty() {
-                continue;
-            }
-            let exists: Option<i64> = conn
-                .query_row("SELECT 1 FROM modules WHERE id=?1", params![mid], |r| r.get(0))
-                .ok();
-            if exists.is_none() {
-                continue;
+        for (idx, (mid, w, dk)) in segs.iter().enumerate() {
+            if mid.trim().is_empty() || dk.trim().is_empty() {
+                return Err(format!("segment 缺少 dimensionKey/sourceModuleId: idx={}", idx));
             }
             let w_ov: Option<f64> = if (*w - 1.0).abs() < 1e-9 { None } else { Some(*w) };
             conn.execute(
-                "INSERT INTO assembly_items (id, assembly_id, module_id, sort_order, weight_override, is_locked) VALUES (?1, ?2, ?3, ?4, ?5, 0)",
-                params![new_id(), aid, mid, idx as i64, w_ov],
+                "INSERT INTO assembly_items (id, assembly_id, module_id, sort_order, weight_override, is_locked, dimension_key) VALUES (?1, ?2, ?3, ?4, ?5, 0, ?6)",
+                params![new_id(), aid, mid, idx as i64, w_ov, dk],
             )
             .map_err(|e| e.to_string())?;
         }
@@ -689,7 +762,6 @@ pub fn db_load_selected_items(
     assembly_id: String,
 ) -> Result<Vec<SelectedItemDto>, String> {
     let conn = open_conn(&app)?;
-    // Fetch assembly prompt_ir for snapshot fallback
     let prompt_ir: Option<String> = conn
         .query_row(
             "SELECT prompt_ir FROM assemblies WHERE id=?1 AND is_deleted=0",
@@ -698,20 +770,28 @@ pub fn db_load_selected_items(
         )
         .ok();
 
+    // Need04 破坏性：prompt_ir 以 camelCase DTO 为唯一口径解析
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    #[allow(non_snake_case)]
+    struct IrSeg { dimensionKey: String, text: String, weight: f64, sourceModuleId: String }
+    #[derive(Deserialize)]
+    #[allow(dead_code)]
+    struct IrDto { segments: Vec<IrSeg>, warnings: Vec<String> }
+
     let snapshot_map: std::collections::HashMap<String, (String, String, f64)> = {
         let mut m = std::collections::HashMap::new();
         if let Some(ref json) = prompt_ir {
-            if let Ok(v) = serde_json::from_str::<serde_json::Value>(json) {
-                if let Some(arr) = v.get("segments").and_then(|s| s.as_array()) {
-                    for seg in arr {
-                        let mid = seg.get("source_module_id").and_then(|x| x.as_str()).unwrap_or("").to_string();
-                        let text = seg.get("text").and_then(|x| x.as_str()).unwrap_or("").to_string();
-                        let dk = seg.get("dimension_key").and_then(|x| x.as_str()).unwrap_or("").to_string();
-                        let w = seg.get("weight").and_then(|x| x.as_f64()).unwrap_or(1.0);
-                        if !mid.is_empty() {
-                            m.insert(mid, (text, dk, w));
-                        }
+            if json.trim().is_empty() {
+                // empty -> no snapshot
+            } else {
+                let ir: IrDto = serde_json::from_str(json)
+                    .map_err(|e| format!("prompt_ir 解析失败: {}", e))?;
+                for s in ir.segments {
+                    if s.dimensionKey.trim().is_empty() || s.sourceModuleId.trim().is_empty() {
+                        return Err(format!("prompt_ir 含空 dimensionKey/sourceModuleId: text={}", s.text));
                     }
+                    m.insert(s.sourceModuleId, (s.text, s.dimensionKey, s.weight));
                 }
             }
         }
@@ -720,7 +800,7 @@ pub fn db_load_selected_items(
 
     let mut stmt = conn
         .prepare(
-            "SELECT ai.id, ai.assembly_id, ai.module_id, ai.sort_order, ai.weight_override, ai.is_locked, m.content_en, m.display_name, m.weight as mod_weight, m.is_deleted as mod_deleted, m.dimension_id, d.key as dim_key FROM assembly_items ai LEFT JOIN modules m ON m.id=ai.module_id LEFT JOIN dimensions d ON d.id=m.dimension_id WHERE ai.assembly_id=?1 ORDER BY ai.sort_order",
+            "SELECT ai.id, ai.assembly_id, ai.module_id, ai.sort_order, ai.weight_override, ai.is_locked, ai.dimension_key, m.content_en, m.display_name, m.weight as mod_weight, m.is_deleted as mod_deleted, m.dimension_id, d.key as dim_key FROM assembly_items ai LEFT JOIN modules m ON m.id=ai.module_id LEFT JOIN dimensions d ON d.id=m.dimension_id WHERE ai.assembly_id=?1 ORDER BY ai.sort_order",
         )
         .map_err(|e| e.to_string())?;
     let rows = stmt
@@ -729,97 +809,89 @@ pub fn db_load_selected_items(
                 r.get::<_, String>(2)?, // module_id
                 r.get::<_, Option<f64>>(4)?,
                 r.get::<_, i64>(5)? != 0,
-                r.get::<_, Option<String>>(6)?,
-                r.get::<_, Option<String>>(7)?,
-                r.get::<_, Option<f64>>(8)?,
-                r.get::<_, Option<i64>>(9)?,
-                r.get::<_, Option<String>>(10)?,
-                r.get::<_, Option<String>>(11)?,
+                r.get::<_, Option<String>>(6)?, // ai.dimension_key
+                r.get::<_, Option<String>>(7)?, // m.content_en
+                r.get::<_, Option<String>>(8)?, // m.display_name
+                r.get::<_, Option<f64>>(9)?,    // m.weight
+                r.get::<_, Option<i64>>(10)?,   // m.is_deleted
+                r.get::<_, Option<String>>(11)?, // m.dimension_id
+                r.get::<_, Option<String>>(12)?, // d.key
             ))
         })
         .map_err(|e| e.to_string())?;
 
     let mut result: Vec<SelectedItemDto> = Vec::new();
     for r in rows {
-        let (mid, w_ov, locked, content_en, display_name, mod_weight, mod_deleted, dimension_id, dim_key) =
+        let (mid, w_ov, locked, ai_dk, content_en, display_name, mod_weight, mod_deleted, dimension_id, dim_key) =
             r.map_err(|e| e.to_string())?;
         let snap = snapshot_map.get(&mid);
         let is_deleted = mod_deleted.map(|v| v != 0).unwrap_or(false);
-        let module = if content_en.is_none() || is_deleted {
-            let text = snap.map(|(t, _, _)| t.clone()).unwrap_or_else(|| format!("[已失效:{}]", &mid[..mid.len().min(8)]));
-            let dk = snap.map(|(_, k, _)| k.clone()).unwrap_or_default();
-            let w = snap.map(|(_, _, ww)| *ww).unwrap_or(1.0);
-            let disp = format!("[已失效] {}", &text[..text.len().min(20)]);
-            ModuleDto {
-                id: mid.clone(),
-                dimension_id: dimension_id.unwrap_or_default(),
-                content_en: text.clone(),
-                display_name: disp,
-                weight: w,
-                is_enabled: false,
-                is_nsfw: false,
-                usage_count: 0,
-                example_image: None,
-                notes: Some("[原条目已删除，已用快照占位]".to_string()),
-                dimension_key: Some(dk),
-            }
+        // Need04: 优先取 ai.dimension_key，不再回退到 d.key 兼容
+        let effective_dk = if ai_dk.as_deref().map(|s| !s.trim().is_empty()).unwrap_or(false) {
+            ai_dk.clone()
+        } else if snap.is_some() {
+            snap.map(|(_, k, _)| k.clone())
         } else {
-            ModuleDto {
-                id: mid.clone(),
-                dimension_id: dimension_id.unwrap_or_default(),
-                content_en: content_en.unwrap_or_default(),
-                display_name: display_name.unwrap_or_default(),
-                weight: mod_weight.unwrap_or(1.0),
-                is_enabled: true,
-                is_nsfw: false,
-                usage_count: 0,
-                example_image: None,
-                notes: None,
-                dimension_key: dim_key.clone(),
-            }
+            dim_key.clone()
         };
-        let _ = display_name; // suppress unused
-        let _ = mod_weight;
-        result.push(SelectedItemDto {
-            module,
-            weight_override: w_ov,
-            locked,
-        });
+        let module = resolve_module_with_fallback(
+            &mid,
+            content_en,
+            display_name,
+            mod_weight,
+            dimension_id,
+            dim_key.clone(),
+            is_deleted,
+            snap,
+            effective_dk,
+        );
+        // 破坏性强校验：dimensionKey 非空
+        if module.dimension_key.as_deref().map(|s| s.trim().is_empty()).unwrap_or(true) {
+            return Err(format!("assembly_items 缺少 dimensionKey: moduleId={}", mid));
+        }
+        result.push(SelectedItemDto { module, weight_override: w_ov, locked });
     }
 
     if result.is_empty() {
         if let Some(json) = prompt_ir {
-            if let Ok(v) = serde_json::from_str::<serde_json::Value>(&json) {
-                if let Some(arr) = v.get("segments").and_then(|s| s.as_array()) {
-                    for seg in arr {
-                        let mid = seg.get("source_module_id").and_then(|x| x.as_str()).unwrap_or("").to_string();
-                        let text = seg.get("text").and_then(|x| x.as_str()).unwrap_or("").to_string();
-                        let dk = seg.get("dimension_key").and_then(|x| x.as_str()).unwrap_or("").to_string();
-                        let w = seg.get("weight").and_then(|x| x.as_f64()).unwrap_or(1.0);
-                        let w_ov = if (w - 1.0).abs() < 1e-9 { None } else { Some(w) };
-                        result.push(SelectedItemDto {
-                            module: ModuleDto {
-                                id: if mid.is_empty() { format!("snap_{}", result.len()) } else { mid },
-                                dimension_id: String::new(),
-                                content_en: text.clone(),
-                                display_name: if text.is_empty() { "[快照]".to_string() } else { text[..text.len().min(20)].to_string() },
-                                weight: w,
-                                is_enabled: false,
-                                is_nsfw: false,
-                                usage_count: 0,
-                                example_image: None,
-                                notes: Some("[快照还原]".to_string()),
-                                dimension_key: Some(dk),
-                            },
-                            weight_override: w_ov,
-                            locked: false,
-                        });
+            if json.trim().is_empty() {
+                // nothing
+            } else {
+                let ir: IrDto = serde_json::from_str(&json)
+                    .map_err(|e| format!("prompt_ir 解析失败: {}", e))?;
+                for seg in ir.segments {
+                    if seg.dimensionKey.trim().is_empty() || seg.sourceModuleId.trim().is_empty() {
+                        return Err(format!("prompt_ir 含空 dimensionKey/sourceModuleId: text={}", seg.text));
                     }
+                    let w_ov = if (seg.weight - 1.0).abs() < 1e-9 { None } else { Some(seg.weight) };
+                    result.push(SelectedItemDto {
+                        module: ModuleDto {
+                            id: seg.sourceModuleId.clone(),
+                            dimension_id: String::new(),
+                            content_en: seg.text.clone(),
+                            display_name: if seg.text.is_empty() { "[快照]".to_string() } else { safe_truncate(&seg.text, 20) },
+                            weight: seg.weight,
+                            is_enabled: false,
+                            is_nsfw: false,
+                            usage_count: 0,
+                            example_image: None,
+                            notes: Some("[快照还原]".to_string()),
+                            dimension_key: Some(seg.dimensionKey.clone()),
+                        },
+                        weight_override: w_ov,
+                        locked: false,
+                    });
                 }
             }
         }
     }
 
+    // 最终分类强校验
+    for dto in &result {
+        if dto.module.dimension_key.as_deref().map(|s| s.trim().is_empty()).unwrap_or(true) {
+            return Err(format!("回填结果缺少 dimensionKey: moduleId={}", dto.module.id));
+        }
+    }
     Ok(result)
 }
 
@@ -853,7 +925,7 @@ pub fn db_soft_delete_assembly(app: AppHandle, id: String) -> Result<(), String>
 }
 
 // ------------------------------------------------------------------
-// Templates
+// Templates — Need04 破坏性：template_items 明细表为唯一形态
 // ------------------------------------------------------------------
 #[tauri::command]
 pub fn db_save_template(
@@ -863,7 +935,16 @@ pub fn db_save_template(
     config: AssemblyConfigDto,
     enabled_keys: Vec<String>,
     cover: Option<String>,
+    selected_items: Vec<SelectedItemDto>,
 ) -> Result<String, String> {
+    if selected_items.is_empty() {
+        return Err("模板内容为空，请先配置画布".to_string());
+    }
+    for it in &selected_items {
+        if it.module.dimension_key.as_deref().map(|s| s.trim().is_empty()).unwrap_or(true) {
+            return Err(format!("模板项缺少 dimensionKey: moduleId={}", it.module.id));
+        }
+    }
     let conn = open_conn(&app)?;
     let tid = new_id();
     let ts = now_ts();
@@ -875,15 +956,36 @@ pub fn db_save_template(
             "sort_by": config.sort_by,
         },
         "enabled_dimension_keys": enabled_keys,
-        "version": 1,
+        "version": 2,
     });
     let config_json = serde_json::to_string(&payload).map_err(|e| e.to_string())?;
-    conn.execute(
-        "INSERT INTO templates (id, name, description, config_json, cover_prompt, created_at, is_deleted) VALUES (?1, ?2, ?3, ?4, ?5, ?6, 0)",
-        params![tid, name, desc, config_json, cover, ts],
-    )
-    .map_err(|e| e.to_string())?;
-    Ok(tid)
+    conn.execute("BEGIN IMMEDIATE", []).map_err(|e| e.to_string())?;
+    let res: Result<(), String> = (|| {
+        conn.execute(
+            "INSERT INTO templates (id, name, description, config_json, cover_prompt, created_at, is_deleted) VALUES (?1, ?2, ?3, ?4, ?5, ?6, 0)",
+            params![tid, name, desc, config_json, cover, ts],
+        )
+        .map_err(|e| e.to_string())?;
+        for (idx, it) in selected_items.iter().enumerate() {
+            let dk = it.module.dimension_key.clone().unwrap_or_default();
+            conn.execute(
+                "INSERT INTO template_items (id, template_id, module_id, dimension_key, sort_order, weight_override, is_locked) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                params![new_id(), tid, it.module.id, dk, idx as i64, it.weight_override, if it.locked { 1 } else { 0 }],
+            )
+            .map_err(|e| e.to_string())?;
+        }
+        Ok(())
+    })();
+    match res {
+        Ok(()) => {
+            conn.execute("COMMIT", []).map_err(|e| e.to_string())?;
+            Ok(tid)
+        }
+        Err(e) => {
+            let _ = conn.execute("ROLLBACK", []);
+            Err(e)
+        }
+    }
 }
 
 #[tauri::command]
@@ -912,36 +1014,17 @@ pub fn db_list_templates(app: AppHandle) -> Result<Vec<TemplateDto>, String> {
 }
 
 #[tauri::command]
-pub fn db_apply_template(app: AppHandle, id: String) -> Result<(AssemblyConfigDto, Vec<String>), String> {
+pub fn db_apply_template(app: AppHandle, id: String) -> Result<(AssemblyConfigDto, Vec<String>, Vec<SelectedItemDto>), String> {
     let conn = open_conn(&app)?;
-    let cfg_json: Option<String> = conn
+    let cfg_json: String = conn
         .query_row("SELECT config_json FROM templates WHERE id=?1 AND is_deleted=0", params![id], |r| r.get(0))
-        .ok();
-    let Some(json) = cfg_json else {
-        return Ok((
-            AssemblyConfigDto {
-                separator: ", ".to_string(),
-                use_weight_brackets: true,
-                model_profile: "sd".to_string(),
-                sort_by: "dimensionOrder".to_string(),
-            },
-            vec![],
-        ));
-    };
-    if json.is_empty() {
-        return Ok((
-            AssemblyConfigDto {
-                separator: ", ".to_string(),
-                use_weight_brackets: true,
-                model_profile: "sd".to_string(),
-                sort_by: "dimensionOrder".to_string(),
-            },
-            vec![],
-        ));
+        .map_err(|_| "模板不存在或已删除".to_string())?;
+    if cfg_json.trim().is_empty() {
+        return Err("模板不含明细，请重建".to_string());
     }
-    let v: serde_json::Value = serde_json::from_str(&json).map_err(|e| e.to_string())?;
+    let v: serde_json::Value = serde_json::from_str(&cfg_json).map_err(|e| e.to_string())?;
     let ac = v.get("assembly_config");
-    let enabled = v
+    let enabled: Vec<String> = v
         .get("enabled_dimension_keys")
         .and_then(|x| x.as_array())
         .map(|arr| arr.iter().filter_map(|x| x.as_str().map(|s| s.to_string())).collect())
@@ -952,7 +1035,62 @@ pub fn db_apply_template(app: AppHandle, id: String) -> Result<(AssemblyConfigDt
         model_profile: ac.and_then(|x| x.get("model_profile")).and_then(|x| x.as_str()).unwrap_or("sd").to_string(),
         sort_by: ac.and_then(|x| x.get("sort_by")).and_then(|x| x.as_str()).unwrap_or("dimensionOrder").to_string(),
     };
-    Ok((cfg, enabled))
+    // Need04 破坏性：必须含 template_items，否则视为老模板废弃
+    let count: i64 = conn
+        .query_row("SELECT COUNT(*) FROM template_items WHERE template_id=?1", params![id], |r| r.get(0))
+        .map_err(|e| e.to_string())?;
+    if count == 0 {
+        return Err("模板不含明细，请重建".to_string());
+    }
+    let mut stmt = conn
+        .prepare(
+            "SELECT ti.module_id, ti.dimension_key, ti.weight_override, ti.is_locked, m.content_en, m.display_name, m.weight, m.is_deleted, m.dimension_id, d.key as dim_key FROM template_items ti LEFT JOIN modules m ON m.id=ti.module_id LEFT JOIN dimensions d ON d.id=m.dimension_id WHERE ti.template_id=?1 ORDER BY ti.sort_order",
+        )
+        .map_err(|e| e.to_string())?;
+    let rows = stmt
+        .query_map(params![id], |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, Option<f64>>(2)?,
+                r.get::<_, i64>(3)? != 0,
+                r.get::<_, Option<String>>(4)?,
+                r.get::<_, Option<String>>(5)?,
+                r.get::<_, Option<f64>>(6)?,
+                r.get::<_, Option<i64>>(7)?,
+                r.get::<_, Option<String>>(8)?,
+                r.get::<_, Option<String>>(9)?,
+            ))
+        })
+        .map_err(|e| e.to_string())?;
+    let mut items: Vec<SelectedItemDto> = Vec::new();
+    for r in rows {
+        let (mid, ti_dk, w_ov, locked, content_en, display_name, mod_weight, mod_deleted, dimension_id, dim_key) =
+            r.map_err(|e| e.to_string())?;
+        if ti_dk.trim().is_empty() {
+            return Err(format!("template_items 缺少 dimensionKey: moduleId={}", mid));
+        }
+        let is_deleted = mod_deleted.map(|v| v != 0).unwrap_or(false);
+        let module = resolve_module_with_fallback(
+            &mid,
+            content_en,
+            display_name,
+            mod_weight,
+            dimension_id,
+            dim_key,
+            is_deleted,
+            None,
+            Some(ti_dk.clone()),
+        );
+        if module.dimension_key.as_deref().map(|s| s.trim().is_empty()).unwrap_or(true) {
+            return Err(format!("模板回填缺少 dimensionKey: moduleId={}", mid));
+        }
+        items.push(SelectedItemDto { module, weight_override: w_ov, locked });
+    }
+    if items.iter().any(|it| it.module.dimension_key.as_deref().map(|s| s.trim().is_empty()).unwrap_or(true)) {
+        return Err("模板回填 dimensionKey 为空".to_string());
+    }
+    Ok((cfg, enabled, items))
 }
 
 #[tauri::command]
