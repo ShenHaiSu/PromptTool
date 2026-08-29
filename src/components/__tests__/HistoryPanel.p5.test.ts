@@ -20,7 +20,7 @@ vi.mock('@/lib/db', () => ({
   dbSoftDeleteTemplate: vi.fn(async () => {}),
   dbSaveAssembly: vi.fn(async () => 'new-id'),
   dbSaveTemplate: vi.fn(async () => 'tmpl-new'),
-  dbApplyTemplate: vi.fn(async () => [{ separator: ', ', useWeightBrackets: true, modelProfile: 'sd', sortBy: 'dimensionOrder' }, ['top']]),
+  dbApplyTemplate: vi.fn(async () => [{ separator: ', ', useWeightBrackets: true, modelProfile: 'sd', sortBy: 'dimensionOrder' }, ['top'], [{ module: { id: 'm1', dimensionId: 'd1', contentEn: 'white shirt', displayName: '白衬衫', weight: 1, isEnabled: true, isNsfw: false, usageCount: 0, dimensionKey: 'top' }, weightOverride: null, locked: false }]]),
   dbLoadSelectedItems: vi.fn(async () => []),
   dbSearchAssemblies: vi.fn(async () => []),
   dbSearchModules: vi.fn(async () => []),
@@ -150,7 +150,7 @@ describe('HistoryPanel P5', () => {
       dbSoftDeleteAssembly: vi.fn(async () => {}),
       dbSoftDeleteTemplate: vi.fn(async () => {}),
       dbSaveTemplate: vi.fn(async () => 'tid'),
-      dbApplyTemplate: vi.fn(async () => [{ separator: ', ', useWeightBrackets: true, modelProfile: 'sd', sortBy: 'dimensionOrder' }, []]),
+      dbApplyTemplate: vi.fn(async () => [{ separator: ', ', useWeightBrackets: true, modelProfile: 'sd', sortBy: 'dimensionOrder' }, [], []]),
       dbLoadSelectedItems: vi.fn(async () => []),
     }))
     // 由于 vi.mock 已 hoist，此用例仅校验组件空状态模板存在性（兜底）

@@ -13,7 +13,7 @@ const mockDb = vi.hoisted(() => ({
   searchAssemblies: vi.fn(async () => [{ id: 'a1', title: 't1', promptIrJson: '{}', finalPrompt: 'hello', modelProfile: 'sd', createdAt: 1, isFavorite: false }]),
   renameAssembly: vi.fn(async () => {}),
   loadSelectedItems: vi.fn(async () => [{ module: { id: 'm1', dimensionId: 'd1', contentEn: 'white shirt', displayName: '白衬衫', weight: 1, isEnabled: true, isNsfw: false, usageCount: 0, dimensionKey: 'top' }, weightOverride: null, locked: false }]),
-  applyTemplate: vi.fn(async () => [{ separator: ', ', useWeightBrackets: true, modelProfile: 'sd', sortBy: 'dimensionOrder' }, ['top', 'bottom']] as const),
+  applyTemplate: vi.fn(async () => [{ separator: ', ', useWeightBrackets: true, modelProfile: 'sd', sortBy: 'dimensionOrder' }, ['top', 'bottom'], [{ module: { id: 'm1', dimensionId: 'd1', contentEn: 'white shirt', displayName: '白衬衫', weight: 1, isEnabled: true, isNsfw: false, usageCount: 0, dimensionKey: 'top' }, weightOverride: null, locked: false }]] as const),
 }))
 
 vi.mock('@/lib/db', () => ({
@@ -95,12 +95,14 @@ describe('history store P5 扩展', () => {
 
   it('saveTemplate() 与 applyTemplate() 闭环', async () => {
     const s = useHistoryStore()
-    const tid = await s.saveTemplate('模板A', 'desc', { separator: ', ', useWeightBrackets: true, modelProfile: 'sd', sortBy: 'dimensionOrder' }, ['top'], 'cover')
+    const tid = await s.saveTemplate('模板A', 'desc', { separator: ', ', useWeightBrackets: true, modelProfile: 'sd', sortBy: 'dimensionOrder' }, ['top'], 'cover', [{ module: { id: 'm1', dimensionId: 'd1', contentEn: 'white shirt', displayName: '白衬衫', weight: 1, isEnabled: true, isNsfw: false, usageCount: 0, dimensionKey: 'top' }, locked: false }])
     expect(tid).toBe('tmpl-1')
     expect(mockDb.saveTemplate).toHaveBeenCalled()
-    const [cfg, keys] = await s.applyTemplate('tmpl-1')
+    const [cfg, keys, items] = await s.applyTemplate('tmpl-1')
     expect(cfg.separator).toBe(', ')
     expect(keys).toContain('top')
+    expect(items).toHaveLength(1)
+    expect(items[0]!.module.dimensionKey).toBe('top')
   })
 
   it('loadSelectedItems() 透传并支持已失效占位（返回即有效）', async () => {
