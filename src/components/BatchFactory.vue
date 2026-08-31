@@ -142,7 +142,7 @@ defineExpose({ refresh: refreshDims })
 </script>
 
 <template>
-  <section data-testid="batch-factory" class="flex min-h-0 flex-col border-b">
+  <section data-testid="batch-factory" class="flex min-h-0 flex-1 flex-col overflow-hidden">
     <!-- 顶部控制行 -->
     <div class="flex shrink-0 flex-col gap-2 px-3 py-2">
       <div class="flex items-center justify-between">
@@ -204,7 +204,7 @@ defineExpose({ refresh: refreshDims })
     >
       暂无批量结果 — 设置数量后点击「随机生成」；可控开关开启时以画布为锚点
     </div>
-    <div v-else ref="parentRef" data-testid="batch-virtual-scroll" class="h-[400px] overflow-auto border-t">
+    <div v-else ref="parentRef" data-testid="batch-virtual-scroll" class="flex-1 min-h-0 overflow-auto border-t">
       <div :style="{ height: totalSize + 'px', width: '100%', position: 'relative' }">
         <div
           v-for="v in virtualItems"

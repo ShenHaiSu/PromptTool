@@ -189,7 +189,7 @@ function copyPrompt(text: string): void {
 </script>
 
 <template>
-  <section data-testid="history-panel" class="flex min-h-0 flex-1 flex-col overflow-hidden border-t" @click="closeCtx()">
+  <section data-testid="history-panel" class="flex min-h-0 flex-1 flex-col overflow-hidden" @click="closeCtx()">
     <Tabs v-model="tab" default-value="history" class="flex min-h-0 flex-1 flex-col">
       <div class="flex shrink-0 items-center gap-2 border-b px-2 py-1.5">
         <TabsList class="shrink-0">

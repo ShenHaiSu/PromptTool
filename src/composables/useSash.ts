@@ -1,7 +1,7 @@
 import { ref, watch } from 'vue'
 
 const STORAGE_KEY = 'pmf:sash'
-const DEFAULT = [0.30, 0.38] as const // left 30%, center 38%, right 32% 余量
+const DEFAULT = [0.28, 0.42] as const // left 28%, center 42%, right 30% 余量 — need04 黄金位重排
 
 function load(): [number, number] {
   try {

@@ -1,11 +1,9 @@
 <script setup lang="ts">
 import { ref, onMounted, onBeforeUnmount, computed, watch } from 'vue'
-import TopBar from '@/components/TopBar.vue'
 import DimensionPanel from '@/components/DimensionPanel.vue'
 import BatchFactory from '@/components/BatchFactory.vue'
 import HistoryPanel from '@/components/HistoryPanel.vue'
 import StatusBar from '@/components/StatusBar.vue'
-import AssemblyCanvas from '@/components/AssemblyCanvas.vue'
 import LibraryDialog from '@/components/LibraryDialog.vue'
 import SegmentImportDialog from '@/components/SegmentImportDialog.vue'
 import { useAssemblyStore } from '@/stores/assembly'
@@ -233,8 +231,6 @@ onBeforeUnmount(() => {
 
 <template>
   <div class="flex h-screen flex-col overflow-hidden bg-background text-foreground">
-    <TopBar :prompt="assembly.finalPrompt" :warnings="assembly.warnings" :ir="assembly.ir" />
-
     <div
       ref="layoutRef"
       data-testid="main-layout"
@@ -246,10 +242,6 @@ onBeforeUnmount(() => {
         class="flex min-h-0 shrink-0 flex-col overflow-hidden border-r bg-card"
         :style="{ width: leftPct }"
       >
-        <div class="flex h-9 shrink-0 items-center justify-between border-b px-3">
-          <h2 class="text-sm font-semibold">维度面板</h2>
-          <span class="text-xs text-muted-foreground">Tree + 搜索 + NSFW</span>
-        </div>
         <DimensionPanel ref="dimensionPanelRef" />
       </section>
 
@@ -268,7 +260,7 @@ onBeforeUnmount(() => {
         class="flex min-h-0 shrink-0 flex-col overflow-hidden bg-background"
         :style="{ width: centerPct }"
       >
-        <AssemblyCanvas />
+        <BatchFactory ref="batchFactoryRef" />
       </section>
 
       <div
@@ -285,7 +277,6 @@ onBeforeUnmount(() => {
         data-testid="panel-right"
         class="flex min-h-0 flex-1 flex-col overflow-hidden bg-card"
       >
-        <BatchFactory ref="batchFactoryRef" />
         <HistoryPanel />
       </section>
     </div>
