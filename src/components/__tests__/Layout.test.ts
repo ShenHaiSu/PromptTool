@@ -31,13 +31,12 @@ beforeEach(() => {
   })
 })
 
-describe('Main layout 30:38:32 + TopBar + StatusBar + Sash persistence', () => {
-  it('三栏与 sash/TopBar/StatusBar 占据布局', async () => {
+describe('Main layout — need04 28:42:30 + 无 TopBar 常驻 + Sash + StatusBar', () => {
+  it('三栏与双 sash/StatusBar 占据新布局（无 TopBar 常驻）', async () => {
     const w = mount(App, { global: { plugins: [createPinia()] } })
-    // allow onMounted async fetches
     await new Promise((r) => setTimeout(r, 0))
     await w.vm.$nextTick()
-    expect(w.find('[data-testid="topbar"]').exists()).toBe(true)
+    expect(w.find('[data-testid="topbar"]').exists()).toBe(false)
     expect(w.find('[data-testid="main-layout"]').exists()).toBe(true)
     expect(w.find('[data-testid="panel-left"]').exists()).toBe(true)
     expect(w.find('[data-testid="panel-center"]').exists()).toBe(true)
@@ -48,16 +47,19 @@ describe('Main layout 30:38:32 + TopBar + StatusBar + Sash persistence', () => {
     expect(w.find('[data-testid="dimension-panel"]').exists()).toBe(true)
     expect(w.find('[data-testid="batch-factory"]').exists()).toBe(true)
     expect(w.find('[data-testid="history-panel"]').exists()).toBe(true)
+    // 预览仅悬浮 Dialog，非 TopBar 常驻
+    expect(w.find('[data-testid="preview-trigger"]').exists()).toBe(true)
+    // 黄金位：中区为批量，右栏为历史
+    expect(w.find('[data-testid="panel-center"]').text()).toContain('批量工厂')
   })
 
-  it('初始 sash 为 30:38:32 且左右 sash 可拖拽持久化', async () => {
+  it('初始 sash 为 28:42:30', async () => {
     const w = mount(App, { global: { plugins: [createPinia()] } })
     await w.vm.$nextTick()
     const left = w.find('[data-testid="panel-left"]')
     const center = w.find('[data-testid="panel-center"]')
-    // style.width 由 leftFrac/centerFrac 驱动
-    expect((left.element as HTMLElement).style.width).toMatch(/30/)
-    expect((center.element as HTMLElement).style.width).toMatch(/38/)
+    expect((left.element as HTMLElement).style.width).toMatch(/28/)
+    expect((center.element as HTMLElement).style.width).toMatch(/42/)
   })
 
   it('主题切换按钮可切换 light↔dark 并持久化', async () => {
@@ -75,7 +77,6 @@ describe('Main layout 30:38:32 + TopBar + StatusBar + Sash persistence', () => {
   it('最小宽度 1280x720 无溢出（容器 overflow-hidden，sash 约束 12%~65%）', async () => {
     const w = mount(App, { global: { plugins: [createPinia()] } })
     await w.vm.$nextTick()
-    // 布局容器应为 flex 并且 overflow-hidden（GPU 合成，不用递归 pack）
     const layout = w.find('[data-testid="main-layout"]')
     expect(layout.classes().join(' ')).toContain('overflow-hidden')
   })
