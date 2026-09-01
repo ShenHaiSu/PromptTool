@@ -16,7 +16,7 @@ import BusinessDbOnboardingDialog from '@/components/BusinessDbOnboardingDialog.
 import DbManagerDrawer from '@/components/DbManagerDrawer.vue'
 import { useDbRegistryStore } from '@/stores/dbRegistry'
 import { useLibraryStore } from '@/stores/library'
-import { dbGetDimensions, dbGetAllModulesGrouped, dbGetTempCarry } from '@/lib/db'
+import { dbGetTempCarry } from '@/lib/db'
 import { on as onEvent, off as offEvent, LIBRARY_CHANGED } from '@/lib/libraryEvents'
 
 const assembly = useAssemblyStore()
@@ -82,10 +82,6 @@ function syncCountsFromLibrary(): void {
 }
 
 function handleLibraryChanged(): void {
-  // P1/P3：任意写后，状态栏计数随 library 同步；BatchFactory 已通过事件自行 scheduleFetch，
-  // 此处额外确保左侧面板在非 DimensionPanel 触发的场景（如导入、切库）也能刷新
-  void dimensionPanelRef.value?.refresh()
-  // library 的 scheduleFetch 已由 BatchFactory 监听触发；此处再调度一次以确保计数同步（幂等）
   library.scheduleFetch()
 }
 
@@ -100,19 +96,9 @@ function toggleSegmentImport(): void {
 }
 async function refreshStats(): Promise<void> {
   try {
-    const dims = await dbGetDimensions()
-    dimCount.value = dims.length
-    try {
-      const grouped = await dbGetAllModulesGrouped()
-      let total = 0
-      for (const v of Object.values(grouped)) total += (v as unknown[]).length
-      moduleCount.value = total
-    } catch { /* ignore */ }
-    await dimensionPanelRef.value?.refresh()
-    await batchFactoryRef.value?.refresh()
-    // 同步 library store，避免与直接拉取的状态分叉
     await library.fetchAll()
     syncCountsFromLibrary()
+    await batchFactoryRef.value?.refresh()
   } catch { /* ignore */ }
 }
 
@@ -190,35 +176,24 @@ onMounted(async () => {
   }
 
   try {
-    const dims = await dbGetDimensions()
-    dimCount.value = dims.length
+    // need06: library 是维度面板与随机侧的唯一数据源
+    await library.fetchAll()
+    syncCountsFromLibrary()
     try {
-      const grouped = await dbGetAllModulesGrouped()
-      let total = 0
-      for (const v of Object.values(grouped)) total += (v as unknown[]).length
-      moduleCount.value = total
-      //  priming library store with the same snapshot
-      try { await library.fetchAll(); syncCountsFromLibrary() } catch { /* ignore */ }
-      try {
-        const carry = await dbGetTempCarry()
-        if (carry && carry.selectedItemIds?.length) {
-          const validIds = new Set<string>()
-          for (const arr of Object.values(grouped)) for (const m of arr) validIds.add((m as { id: string }).id)
-          const filtered = carry.selectedItemIds.filter((id) => validIds.has(id))
-          if (filtered.length) {
-            const idToModule = new Map<string, unknown>()
-            for (const arr of Object.values(grouped)) for (const m of arr as unknown as { id: string }[]) idToModule.set(m.id, m)
-            const items = filtered.map((id) => {
-              const mod = idToModule.get(id) as { id: string; dimensionId?: string } | undefined
-              if (!mod) return null
-              const w = carry.weightDraft?.[id] ?? null
-              return { module: mod, locked: false, weightOverride: w }
-            }).filter(Boolean) as typeof assembly.selectedItems
-            assembly.setSelected(items)
-          }
-        }
-      } catch { /* ignore carry */ }
-    } catch { /* ignore in jsdom */ }
+      const carry = await dbGetTempCarry()
+      if (carry && carry.selectedItemIds?.length) {
+        const grouped = library.modulesByDim as Record<string, { id: string; dimensionId?: string }[]>
+        const idToModule = new Map<string, { id: string; dimensionId?: string }>()
+        for (const arr of Object.values(grouped)) for (const m of arr) idToModule.set(m.id, m)
+        const items = carry.selectedItemIds.map((id) => {
+          const mod = idToModule.get(id)
+          if (!mod) return null
+          const w = carry.weightDraft?.[id] ?? null
+          return { module: mod, locked: false, weightOverride: w }
+        }).filter(Boolean) as typeof assembly.selectedItems
+        if (items.length) assembly.setSelected(items)
+      }
+    } catch { /* ignore carry */ }
   } catch { /* ignore */ }
   try { await historyStore.fetchAll() } catch { /* ignore */ }
 })
