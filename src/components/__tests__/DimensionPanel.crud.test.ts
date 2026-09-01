@@ -45,6 +45,8 @@ async function flush(wrapper: ReturnType<typeof mount>) {
 describe('DimensionPanel — Need02 维度折叠 + CRUD', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    localStorage.clear()
+    document.body.innerHTML = ''
     dbMocks.dbGetDimensions.mockResolvedValue([
       { id: 'd_top', key: 'top', nameCn: '上装', nameEn: 'Top', sortOrder: 5, isMultiSelect: false, isEnabled: true, icon: null },
       { id: 'd_bottom', key: 'bottom', nameCn: '下装', nameEn: 'Bottom', sortOrder: 6, isMultiSelect: true, isEnabled: true, icon: null },

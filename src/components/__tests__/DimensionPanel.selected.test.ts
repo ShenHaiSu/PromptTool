@@ -116,12 +116,16 @@ describe('DimensionPanel — need04 双模 + 已选卡片 + 预览', () => {
     expect(btn.exists()).toBe(true)
     expect(btn.text()).toContain('w1.0')
     await btn.trigger('click')
-    expect(w.find('[data-testid="selected-weight-popover"]').exists()).toBe(true)
-    const slider = w.find('[data-testid="weight-slider"]')
-    await slider.setValue('1.4')
-    await w.find('[data-testid="weight-confirm"]').trigger('click')
+    expect(document.body.querySelector('[data-testid="selected-weight-popover"]')).not.toBeNull()
+    const slider = document.body.querySelector('[data-testid="weight-slider"]') as HTMLInputElement
+    expect(slider).not.toBeNull()
+    slider.value = '1.4'
+    slider.dispatchEvent(new Event('input', { bubbles: true }))
+    await w.vm.$nextTick()
+    ;(document.body.querySelector('[data-testid="weight-confirm"]') as HTMLElement).click()
+    await w.vm.$nextTick()
     expect(store.selectedItems[0]!.weightOverride).toBe(1.4)
-    expect(w.find('[data-testid="selected-weight-popover"]').exists()).toBe(false)
+    expect(document.body.querySelector('[data-testid="selected-weight-popover"]')).toBeNull()
   })
 
   it('锁定/移除 同步 assembly', async () => {
