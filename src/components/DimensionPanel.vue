@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, onMounted, watch } from 'vue'
+import { ref, computed, watch, nextTick, onBeforeUnmount, onMounted } from 'vue'
 import { VueDraggable } from 'vue-draggable-plus'
 import { Input } from '@/components/ui/input'
 import { Badge } from '@/components/ui/badge'
@@ -8,7 +8,6 @@ import { ScrollArea } from '@/components/ui/scroll-area'
 import { useAssemblyStore } from '@/stores/assembly'
 import { useHistoryStore } from '@/stores/history'
 import {
-  dbGetDimensions, dbGetAllModulesGrouped,
   dbCreateDimension, dbUpdateDimension,
   dbCreateModule, dbUpdateModule, dbSoftDeleteModule,
 } from '@/lib/db'
@@ -21,18 +20,49 @@ import { useToast } from '@/composables/useToast'
 import { emit, LIBRARY_CHANGED } from '@/lib/libraryEvents'
 import { dimColor } from '@/lib/utils'
 import type { Dimension, Module } from '@/engine/models'
+import { calcPopoverPos, POPOVER_W, POPOVER_H_EST } from '@/lib/need05Position'
+import { useLibraryStore } from '@/stores/library'
+import { useDimensionPanelStore } from '@/stores/dimensionPanel'
 
 const assembly = useAssemblyStore()
 const history = useHistoryStore()
 const { push } = useToast()
+const library = useLibraryStore()
+const panelStore = useDimensionPanelStore()
 
 const keyword = ref('')
 const allowNsfw = ref(false)
 
-const dimensions = ref<Dimension[]>([])
-const modulesByDim = ref<Record<string, Module[]>>({})
-const loading = ref(false)
-const expandedKeys = ref<Set<string>>(new Set())
+// need06: 面板订阅 library 为唯一数据源，展开态下沉到 Store
+const dimensions = computed(() => library.dimensions)
+const rawGrouped = computed(() => library.modulesByDim as Record<string, Module[]>)
+const modulesByDim = computed<Record<string, Module[]>>(() => {
+  const grouped = rawGrouped.value
+  const out: Record<string, Module[]> = {}
+  for (const d of library.dimensions) {
+    const key = d.key
+    const byId = grouped[d.id]
+    const byKey = grouped[key]
+    if (byId) out[d.id] = byId
+    else if (byKey) out[d.id] = byKey
+    else out[d.id] = []
+  }
+  for (const [k, v] of Object.entries(grouped)) {
+    const dim = library.dimensions.find((d) => d.id === k)
+    if (dim && !out[dim.id]) out[dim.id] = v
+  }
+  return out
+})
+const loading = computed(() => library.loading)
+
+// library 维度变化时自动裁剪已不存在的 key
+watch(
+  () => library.dimensions.map((d) => d.key).join('\u0001'),
+  () => {
+    const valid = new Set(library.dimensions.map((d) => d.key))
+    panelStore.prune(valid)
+  },
+)
 
 // —— need04: 双模与预览 ——
 type DimPanelMode = 'browse' | 'selected'
@@ -79,13 +109,35 @@ function selectedCardBg(key: string): string {
   return `rgba(${r},${g},${b},${a})`
 }
 
-// 权重 Popover（复用画布逻辑，迁移至面板）
+// 权重 Popover（need05: Teleport + fixed 视口自适应）
 const activeWeightId = ref<string | null>(null)
 const draftWeight = ref(1.0)
-function openWeightPopover(id: string, cur: number): void { activeWeightId.value = id; draftWeight.value = cur }
-function confirmWeight(id: string): void { const v = clampWeight(draftWeight.value); assembly.updateWeight(id, v === 1 ? null : v); activeWeightId.value = null }
-function cancelWeight(): void { activeWeightId.value = null }
+const weightPos = ref<{ top: number; left: number }>({ top: 0, left: 0 })
+const weightAnchorEl = ref<HTMLElement | null>(null)
 function clampWeight(v: number): number { if (!Number.isFinite(v)) return 1.0; return Math.min(2.0, Math.max(0.5, Math.round(v * 10) / 10)) }
+function openWeightPopover(id: string, cur: number, evt?: MouseEvent): void {
+  activeWeightId.value = id
+  draftWeight.value = cur
+  const el = (evt?.currentTarget as HTMLElement) ?? (typeof document !== 'undefined' ? document.querySelector<HTMLElement>(`[data-testid="selected-weight-btn"][data-module-id="${id}"]`) : null)
+  const rect = (el as HTMLElement | null)?.getBoundingClientRect?.() ?? null
+  if (rect) {
+    weightAnchorEl.value = el as HTMLElement | null
+    weightPos.value = calcPopoverPos(rect, POPOVER_W, POPOVER_H_EST, typeof window !== 'undefined' ? window.innerWidth : 1024, typeof window !== 'undefined' ? window.innerHeight : 768)
+    nextTick(() => {
+      const popEl = typeof document !== 'undefined' ? document.querySelector<HTMLElement>('[data-testid="selected-weight-popover"]') : null
+      if (popEl && rect) {
+        const h = popEl.getBoundingClientRect().height || POPOVER_H_EST
+        weightPos.value = calcPopoverPos(rect, POPOVER_W, h, typeof window !== 'undefined' ? window.innerWidth : 1024, typeof window !== 'undefined' ? window.innerHeight : 768)
+      }
+    })
+  }
+}
+function closeWeightPopover(): void {
+  activeWeightId.value = null
+  weightAnchorEl.value = null
+}
+function confirmWeight(id: string): void { const v = clampWeight(draftWeight.value); assembly.updateWeight(id, v === 1 ? null : v); closeWeightPopover() }
+function cancelWeight(): void { closeWeightPopover() }
 function onDraftInput(e: Event): void {
   const raw = (e.target as HTMLInputElement).value
   const n = parseFloat(raw)
@@ -94,6 +146,166 @@ function onDraftInput(e: Event): void {
 function onSliderInput(e: Event): void {
   const n = parseFloat((e.target as HTMLInputElement).value)
   if (Number.isFinite(n)) draftWeight.value = Math.round(n * 10) / 10
+}
+function onDocClickForPopover(e: MouseEvent): void {
+  if (!activeWeightId.value) return
+  const pop = typeof document !== 'undefined' ? document.querySelector<HTMLElement>('[data-testid="selected-weight-popover"]') : null
+  const btn = weightAnchorEl.value
+  if (pop?.contains(e.target as Node) || btn?.contains(e.target as Node)) return
+  closeWeightPopover()
+}
+function onDocKeydownForPopover(e: KeyboardEvent): void {
+  if (e.key === 'Escape' && activeWeightId.value) closeWeightPopover()
+}
+function onScrollOrResizeForPopover(): void {
+  if (activeWeightId.value) closeWeightPopover()
+}
+watch(activeWeightId, (v) => {
+  if (typeof document === 'undefined') return
+  if (v) {
+    document.addEventListener('click', onDocClickForPopover)
+    document.addEventListener('keydown', onDocKeydownForPopover)
+    window.addEventListener('scroll', onScrollOrResizeForPopover, true)
+    window.addEventListener('resize', onScrollOrResizeForPopover)
+  } else {
+    document.removeEventListener('click', onDocClickForPopover)
+    document.removeEventListener('keydown', onDocKeydownForPopover)
+    window.removeEventListener('scroll', onScrollOrResizeForPopover, true)
+    window.removeEventListener('resize', onScrollOrResizeForPopover)
+  }
+})
+onBeforeUnmount(() => {
+  if (typeof document === 'undefined') return
+  document.removeEventListener('click', onDocClickForPopover)
+  document.removeEventListener('keydown', onDocKeydownForPopover)
+  window.removeEventListener('scroll', onScrollOrResizeForPopover, true)
+  window.removeEventListener('resize', onScrollOrResizeForPopover)
+})
+// Ctrl+Click 直接切换禁用/启用（替代原右键菜单）
+function isCtrlClick(e: MouseEvent): boolean {
+  return e.ctrlKey || e.metaKey
+}
+function onDimHeaderClick(e: MouseEvent, dim: Dimension): void {
+  if (isCtrlClick(e)) {
+    e.preventDefault()
+    void onToggleDimension(dim)
+    return
+  }
+  toggleExpand(dim.key)
+}
+function onModuleRowClick(e: MouseEvent, m: Module, dim: Dimension): void {
+  if (isCtrlClick(e)) {
+    e.preventDefault()
+    void onToggleModule(m, dim)
+    return
+  }
+  onAdd(m, dim)
+}
+function onSelectedCardClick(e: MouseEvent, m: Module): void {
+  if (!isCtrlClick(e)) return
+  // 避免误触卡片内按钮（权重/锁定/移除）冒泡时已 stop，此处仅处理卡片空白区
+  const target = e.target as HTMLElement | null
+  if (target?.closest?.('button')) return
+  e.preventDefault()
+  void onDisableSelected(m)
+}
+async function onToggleDimension(dim: Dimension): Promise<void> {
+  const nextEnabled = !dim.isEnabled
+  const prev = dim.isEnabled
+  const idx = library.dimensions.findIndex((d) => d.id === dim.id)
+  if (idx !== -1) {
+    const next = { ...dim, isEnabled: nextEnabled }
+    library.dimensions[idx] = next as Dimension
+  }
+  try {
+    await dbUpdateDimension({ ...dim, isEnabled: nextEnabled })
+    emit(LIBRARY_CHANGED, { source: 'dimension-panel', op: nextEnabled ? 'enable-dimension' : 'disable-dimension' })
+    push(nextEnabled ? `已启用维度「${dim.nameCn}」` : `已禁用维度「${dim.nameCn}」，不参与可控随机`, nextEnabled ? 'success' : 'info', 1800)
+  } catch (e) {
+    if (idx !== -1) library.dimensions[idx] = { ...dim, isEnabled: prev } as Dimension
+    push(`操作失败: ${String(e)}`, 'error')
+  }
+}
+async function onToggleModule(m: Module, dim: Dimension): Promise<void> {
+  const willDisable = m.isEnabled
+  const wasSelected = willDisable && isSelected(m.id)
+  if (willDisable && wasSelected) {
+    assembly.removeModule(m.id)
+  }
+  const grouped = library.modulesByDim as Record<string, Module[]>
+  const listKey = (grouped[dim.id] ? dim.id : (grouped[dim.key] ? dim.key : dim.id))
+  const list = grouped[listKey] ?? []
+  const mi = list.findIndex((x) => x.id === m.id)
+  const prevEnabled = m.isEnabled
+  if (mi !== -1) {
+    const nextList = [...list]
+    nextList[mi] = { ...m, isEnabled: !prevEnabled }
+    grouped[listKey] = nextList
+    library.modulesByDim = { ...grouped }
+  }
+  try {
+    await dbUpdateModule({ ...m, isEnabled: !prevEnabled })
+    emit(LIBRARY_CHANGED, { source: 'dimension-panel', op: willDisable ? 'disable-module' : 'enable-module' })
+    if (willDisable) {
+      push(wasSelected ? `已禁用并移出已选「${m.displayName}」` : `已禁用词条「${m.displayName}」，不参与可控随机`, 'info', 1800)
+    } else {
+      push(`已启用词条「${m.displayName}」`, 'success', 1500)
+    }
+  } catch (e) {
+    if (mi !== -1) {
+      const g2 = library.modulesByDim as Record<string, Module[]>
+      const lk2 = (g2[dim.id] ? dim.id : (g2[dim.key] ? dim.key : dim.id))
+      const l2 = g2[lk2] ?? []
+      const idx2 = l2.findIndex((x) => x.id === m.id)
+      if (idx2 !== -1) {
+        const nl = [...l2]
+        nl[idx2] = { ...m, isEnabled: prevEnabled }
+        g2[lk2] = nl
+        library.modulesByDim = { ...g2 }
+      }
+    }
+    push(`操作失败: ${String(e)}`, 'error')
+  }
+}
+async function onDisableSelected(m: Module): Promise<void> {
+  // 使用库中最新实体，避免已选快照的 isEnabled 过期
+  let fresh: Module | null = null
+  for (const lst of Object.values(modulesByDim.value)) {
+    const f = lst.find((x) => x.id === m.id)
+    if (f) { fresh = f; break }
+  }
+  const src = fresh ?? m
+  assembly.removeModule(m.id)
+  const dim = dimensions.value.find((d) => d.id === src.dimensionId)
+  const grouped = library.modulesByDim as Record<string, Module[]>
+  const listKey = dim ? (grouped[dim.id] ? dim.id : (grouped[dim.key] ? dim.key : dim.id)) : null
+  const list = listKey ? (grouped[listKey] ?? []) : []
+  const mi = list.findIndex((x) => x.id === src.id)
+  const prevEnabled = src.isEnabled
+  if (mi !== -1 && listKey) {
+    const nl = [...list]
+    nl[mi] = { ...src, isEnabled: false }
+    grouped[listKey] = nl
+    library.modulesByDim = { ...grouped }
+  }
+  try {
+    await dbUpdateModule({ ...src, isEnabled: false })
+    emit(LIBRARY_CHANGED, { source: 'dimension-panel', op: 'disable-module' })
+    push(`已禁用并移出已选「${src.displayName}」`, 'info', 1800)
+  } catch (e) {
+    if (mi !== -1 && listKey) {
+      const g2 = library.modulesByDim as Record<string, Module[]>
+      const l2 = g2[listKey] ?? []
+      const idx2 = l2.findIndex((x) => x.id === src.id)
+      if (idx2 !== -1) {
+        const nl2 = [...l2]
+        nl2[idx2] = { ...src, isEnabled: prevEnabled }
+        g2[listKey] = nl2
+        library.modulesByDim = { ...g2 }
+      }
+    }
+    push(`操作失败: ${String(e)}`, 'error')
+  }
 }
 function onSelectedRemove(id: string): void { assembly.removeModule(id) }
 function onToggleLock(id: string): void { assembly.toggleLocked(id) }
@@ -172,14 +384,11 @@ function filteredModules(dimId: string): Module[] {
 }
 
 function toggleExpand(key: string): void {
-  const s = expandedKeys.value
-  if (s.has(key)) s.delete(key)
-  else s.add(key)
-  expandedKeys.value = new Set(s)
+  panelStore.toggleExpand(key)
 }
 
 function isExpanded(key: string): boolean {
-  return expandedKeys.value.has(key)
+  return panelStore.isExpanded(key)
 }
 
 function isSelected(moduleId: string): boolean {
@@ -187,6 +396,8 @@ function isSelected(moduleId: string): boolean {
 }
 
 function onAdd(m: Module, dim: Dimension): void {
+  if (!m.isEnabled) { push('该词条已禁用，Ctrl+点击可启用', 'warning', 1800); return }
+  if (!dim.isEnabled) { push('该维度已禁用，Ctrl+点击维度头可启用', 'warning', 1800); return }
   if (isSelected(m.id)) return
   if (!dim.isMultiSelect) {
     const existing = assembly.selectedItems.find((it) => it.module.dimensionId === dim.id)
@@ -211,19 +422,29 @@ function onEditDimension(dim: Dimension): void {
 async function onDimConfirm(payload: { key: string; nameCn: string; nameEn: string; sortOrder: number; isMultiSelect: boolean }): Promise<void> {
   try {
     if (dimDialogMode.value === 'create') {
-      await dbCreateDimension(payload.key, payload.nameCn, payload.nameEn || undefined, payload.sortOrder, payload.isMultiSelect)
+      const created = await dbCreateDimension(payload.key, payload.nameCn, payload.nameEn || undefined, payload.sortOrder, payload.isMultiSelect)
+      library.dimensions = [...library.dimensions, created as Dimension]
       push('维度已创建', 'success', 1500)
     } else if (editingDimension.value) {
-      await dbUpdateDimension({
-        ...editingDimension.value,
+      const prev = editingDimension.value
+      const next = {
+        ...prev,
+        key: payload.key,
         nameCn: payload.nameCn,
         nameEn: payload.nameEn,
         sortOrder: payload.sortOrder,
         isMultiSelect: payload.isMultiSelect,
-      })
+      } as Dimension
+      const idx = library.dimensions.findIndex((d) => d.id === prev.id)
+      if (idx !== -1) library.dimensions[idx] = next
+      try {
+        await dbUpdateDimension(next)
+      } catch (e) {
+        if (idx !== -1) library.dimensions[idx] = prev
+        throw e
+      }
       push('维度已更新', 'success', 1500)
     }
-    await refresh()
     emit(LIBRARY_CHANGED, { source: 'dimension-panel', op: dimDialogMode.value === 'create' ? 'create-dimension' : 'update-dimension' })
   } catch (e) {
     push(`操作失败: ${String(e)}`, 'error')
@@ -248,28 +469,38 @@ function onEditModule(m: Module): void {
 async function onModuleConfirm(payload: { dimensionId: string; contentEn: string; displayName: string; weight: number; isNsfw: boolean; notes: string }): Promise<void> {
   try {
     if (moduleDialogMode.value === 'create') {
-      await dbCreateModule(payload.dimensionId, payload.contentEn, payload.displayName, payload.weight)
+      const created = await dbCreateModule(payload.dimensionId, payload.contentEn, payload.displayName, payload.weight)
+      let finalMod: Module = created as Module
       if (payload.isNsfw || payload.notes) {
-        const grouped = await dbGetAllModulesGrouped()
-        const all = Object.values(grouped).flat()
-        const created = all.find((x) => x.contentEn === payload.contentEn && x.dimensionId === payload.dimensionId)
-        if (created && (payload.isNsfw !== created.isNsfw || payload.notes !== (created.notes ?? ''))) {
-          await dbUpdateModule({ ...created, isNsfw: payload.isNsfw, notes: payload.notes || null })
-        }
+        const patched = { ...created, isNsfw: payload.isNsfw, notes: payload.notes || null } as Module
+        try { await dbUpdateModule(patched); finalMod = patched } catch {}
+      }
+      const dim = library.dimensions.find((d) => d.id === payload.dimensionId)
+      if (dim) {
+        const grouped = library.modulesByDim as Record<string, Module[]>
+        const key = grouped[dim.id] ? dim.id : (grouped[dim.key] ? dim.key : dim.id)
+        const list = grouped[key] ?? []
+        grouped[key] = [...list, finalMod]
+        library.modulesByDim = { ...grouped }
       }
       push('词条已创建', 'success', 1500)
     } else if (editingModule.value) {
-      await dbUpdateModule({
-        ...editingModule.value,
-        contentEn: payload.contentEn,
-        displayName: payload.displayName,
-        weight: payload.weight,
-        isNsfw: payload.isNsfw,
-        notes: payload.notes || null,
-      })
+      const prev = editingModule.value
+      const grouped = library.modulesByDim as Record<string, Module[]>
+      const dim = library.dimensions.find((d) => d.id === prev.dimensionId)
+      const key = dim ? (grouped[dim.id] ? dim.id : (grouped[dim.key] ? dim.key : dim.id)) : prev.dimensionId
+      const list = grouped[key] ?? []
+      const idx = list.findIndex((x) => x.id === prev.id)
+      const nextMod = { ...prev, contentEn: payload.contentEn, displayName: payload.displayName, weight: payload.weight, isNsfw: payload.isNsfw, notes: payload.notes || null } as Module
+      if (idx !== -1) {
+        const nl = [...list]
+        nl[idx] = nextMod
+        grouped[key] = nl
+        library.modulesByDim = { ...grouped }
+      }
+      await dbUpdateModule(nextMod)
       push('词条已更新', 'success', 1500)
     }
-    await refresh()
     emit(LIBRARY_CHANGED, { source: 'dimension-panel', op: moduleDialogMode.value === 'create' ? 'create-module' : 'update-module' })
   } catch (e) {
     push(`操作失败: ${String(e)}`, 'error')
@@ -282,13 +513,10 @@ function onBatchCreate(dim: Dimension): void {
 }
 
 async function onBatchImported(): Promise<void> {
-  await refresh()
   emit(LIBRARY_CHANGED, { source: 'dimension-panel', op: 'batch-create-modules' })
   if (batchDimension.value) {
     const key = batchDimension.value.key
-    if (!expandedKeys.value.has(key)) {
-      expandedKeys.value = new Set([...expandedKeys.value, key])
-    }
+    panelStore.setExpanded(key, true)
   }
   push(`批量创建完成`, 'success', 1500)
 }
@@ -296,43 +524,44 @@ async function onBatchImported(): Promise<void> {
 async function onDeleteModule(m: Module): Promise<void> {
   if (!confirm(`确定删除词条「${m.displayName}」？`)) return
   try {
-    await dbSoftDeleteModule(m.id)
-    push('词条已删除', 'success', 1500)
-    await refresh()
-    emit(LIBRARY_CHANGED, { source: 'dimension-panel', op: 'delete-module' })
-  } catch (e) {
-    push(`删除失败: ${String(e)}`, 'error')
+      const grouped = library.modulesByDim as Record<string, Module[]>
+      let removedFrom: string | null = null
+      let removedIndex = -1
+      for (const [k, list] of Object.entries(grouped)) {
+        const idx = list.findIndex((x) => x.id === m.id)
+        if (idx !== -1) {
+          removedFrom = k
+          removedIndex = idx
+          grouped[k] = list.filter((x) => x.id !== m.id)
+          library.modulesByDim = { ...grouped }
+          break
+        }
+      }
+      try {
+        await dbSoftDeleteModule(m.id)
+      } catch (e) {
+        if (removedFrom != null) {
+          const restored = [...((library.modulesByDim as Record<string, Module[]>)[removedFrom] ?? [])]
+          restored.splice(removedIndex, 0, m)
+          library.modulesByDim = { ...(library.modulesByDim as Record<string, Module[]>), [removedFrom]: restored }
+        }
+        throw e
+      }
+      push('词条已删除', 'success', 1500)
+      emit(LIBRARY_CHANGED, { source: 'dimension-panel', op: 'delete-module' })
+    } catch (e) {
+      push(`删除失败: ${String(e)}`, 'error')
+    }
   }
-}
 
 async function refresh(): Promise<void> {
-  loading.value = true
-  try {
-    const dims = await dbGetDimensions()
-    dimensions.value = dims
-    expandedKeys.value = new Set<string>()
-    try {
-      const grouped = await dbGetAllModulesGrouped()
-      const byId: Record<string, Module[]> = {}
-      for (const d of dims) {
-        const key = d.key
-        byId[d.id] = (grouped[key] ?? (grouped[d.id] ?? []))
-      }
-      for (const [k, v] of Object.entries(grouped)) {
-        const dim = dims.find((d) => d.id === k)
-        if (dim && !byId[dim.id]) byId[dim.id] = v
-      }
-      modulesByDim.value = byId
-    } catch {
-      modulesByDim.value = {}
-    }
-  } catch {
-  } finally {
-    loading.value = false
-  }
+  await library.fetchAll()
 }
 
-onMounted(() => { void refresh() })
+// App 负责首帧加载；独立挂载/测试时由兼容层触发同一 library 链路。
+onMounted(() => {
+  if (library.dimensions.length === 0 && !library.loading) void library.fetchAll()
+})
 
 defineExpose({ refresh, keyword, allowNsfw, dimensions, modulesByDim, onCreateDimension, dimPanelMode })
 </script>
@@ -409,12 +638,16 @@ defineExpose({ refresh, keyword, allowNsfw, dimensions, modulesByDim, onCreateDi
             <!-- 维度头 -->
             <button
               :data-testid="`dimension-header-${dim.key}`"
+              :data-dim-key="dim.key"
               class="flex w-full items-center justify-between px-3 py-2 text-left hover:bg-accent/50"
-              @click="toggleExpand(dim.key)"
+              :class="!dim.isEnabled ? 'opacity-60' : ''"
+              :title="!dim.isEnabled ? '已禁用，不参与可控随机 — Ctrl+点击可启用' : 'Ctrl+点击可禁用'"
+              @click="onDimHeaderClick($event, dim)"
             >
               <div class="flex min-w-0 items-center gap-2">
                 <span class="shrink-0 text-xs text-muted-foreground">{{ isExpanded(dim.key) ? '▾' : '▸' }}</span>
                 <span class="truncate text-sm font-medium">{{ dim.nameCn }} <span class="text-xs font-normal text-muted-foreground">/ {{ dim.key }}</span></span>
+                <Badge v-if="!dim.isEnabled" variant="secondary" class="h-5 px-1 py-0 text-[10px]">禁用</Badge>
                 <span v-if="!dim.isMultiSelect" class="rounded bg-amber-100 px-1 py-0.5 text-[10px] text-amber-800 dark:bg-amber-900 dark:text-amber-100">单选</span>
               </div>
               <div class="flex shrink-0 items-center gap-1">
@@ -449,13 +682,13 @@ defineExpose({ refresh, keyword, allowNsfw, dimensions, modulesByDim, onCreateDi
                 :data-testid="`module-row-${m.id}`"
                 :data-module-id="m.id"
                 class="group flex w-full items-center justify-between gap-2 rounded px-2 py-1.5 text-left hover:bg-accent"
-                :class="isSelected(m.id) ? 'bg-primary/10 hover:bg-primary/15' : ''"
-                :title="m.contentEn"
-                @dblclick="onAdd(m, dim)"
-                @click="onAdd(m, dim)"
+                :class="[isSelected(m.id) ? 'bg-primary/10 hover:bg-primary/15' : '', !m.isEnabled ? 'opacity-60' : '']"
+                :title="!m.isEnabled ? '已禁用，不参与可控随机 — Ctrl+点击可启用' : `${m.contentEn} — Ctrl+点击可禁用`"
+                @click="onModuleRowClick($event, m, dim)"
               >
                 <span class="min-w-0 flex-1 truncate text-sm">{{ m.displayName }}</span>
                 <span class="flex shrink-0 items-center gap-1">
+                  <Badge v-if="!m.isEnabled" variant="secondary" class="h-5 px-1 py-0 text-[10px]">禁用</Badge>
                   <span v-if="m.weight !== 1" class="text-xs text-muted-foreground">w{{ m.weight.toFixed(1) }}</span>
                   <span v-if="m.isNsfw" class="h-1.5 w-1.5 rounded-full bg-red-500" title="NSFW" />
                   <Badge v-if="isSelected(m.id)" variant="secondary" class="h-5 px-1 py-0 text-[10px]">已选</Badge>
@@ -535,28 +768,16 @@ defineExpose({ refresh, keyword, allowNsfw, dimensions, modulesByDim, onCreateDi
           <VueDraggable v-model="draggableSelected" data-testid="selected-draggable" class="flex flex-col gap-2" :animation="150" ghost-class="opacity-40" chosen-class="ring-1 ring-primary" handle=".drag-handle" @end="onDragEnd">
             <div v-for="it in filteredSelected" :key="it.module.id" data-testid="selected-card" :data-module-id="it.module.id"
                  class="group flex flex-col gap-1 rounded-md border px-3 py-2.5 shadow-sm hover:shadow"
-                 :style="{ background: selectedCardBg(it.module.dimensionKey ?? ''), borderLeftColor: dimColor(it.module.dimensionKey ?? ''), borderLeftWidth: '4px' }">
+                 :style="{ background: selectedCardBg(it.module.dimensionKey ?? ''), borderLeftColor: dimColor(it.module.dimensionKey ?? ''), borderLeftWidth: '4px' }"
+                 @click="onSelectedCardClick($event, it.module)"
+                 :title="'Ctrl+点击禁用并移出已选'">
               <div class="flex items-center gap-1.5">
                 <span class="drag-handle cursor-grab select-none text-muted-foreground hover:text-foreground" title="拖拽排序">⋮⋮</span>
                 <span class="h-2 w-2 shrink-0 rounded-full" :style="{ background: dimColor(it.module.dimensionKey ?? '') }" />
                 <span class="min-w-0 flex-1 truncate text-sm font-medium" :title="it.module.contentEn">{{ it.module.displayName }}</span>
-                <button data-testid="selected-weight-btn" class="rounded bg-muted px-1.5 py-0.5 font-mono text-[11px] hover:bg-accent" @click="openWeightPopover(it.module.id, it.weightOverride ?? it.module.weight)">w{{ (it.weightOverride ?? it.module.weight).toFixed(1) }}</button>
-                <div v-if="activeWeightId === it.module.id" data-testid="selected-weight-popover" class="absolute z-20 mt-8 flex w-56 flex-col gap-2 rounded-md border bg-popover p-3 shadow-xl" @click.stop>
-                  <p class="text-xs font-medium">权重 0.5 – 2.0 · 步进 0.1</p>
-                  <div class="flex items-center gap-2">
-                    <input data-testid="weight-slider" type="range" min="0.5" max="2.0" step="0.1" :value="String(draftWeight)" class="flex-1 accent-primary" @input="onSliderInput" />
-                    <span class="w-8 text-center font-mono text-xs">{{ draftWeight.toFixed(1) }}</span>
-                  </div>
-                  <div class="flex items-center gap-2">
-                    <Input data-testid="weight-input" type="number" :model-value="String(draftWeight)" :value="String(draftWeight)" min="0.5" max="2.0" step="0.1" class="h-7 flex-1 text-xs" @input="onDraftInput" />
-                  </div>
-                  <div class="flex justify-end gap-1.5">
-                    <Button size="sm" variant="ghost" class="h-7 text-xs" data-testid="weight-cancel" @click="cancelWeight">取消</Button>
-                    <Button size="sm" class="h-7 text-xs" data-testid="weight-confirm" @click="confirmWeight(it.module.id)">确定</Button>
-                  </div>
-                </div>
-                <button data-testid="selected-lock-btn" class="rounded px-1 hover:bg-accent" @click="onToggleLock(it.module.id)">{{ it.locked ? '🔒' : '🔓' }}</button>
-                <button data-testid="selected-remove-btn" class="rounded px-1 hover:bg-accent hover:text-destructive" @click="onSelectedRemove(it.module.id)">✕</button>
+                <button data-testid="selected-weight-btn" :data-module-id="it.module.id" class="rounded bg-muted px-1.5 py-0.5 font-mono text-[11px] hover:bg-accent" @click.stop="openWeightPopover(it.module.id, it.weightOverride ?? it.module.weight, $event)">w{{ (it.weightOverride ?? it.module.weight).toFixed(1) }}</button>
+                <button data-testid="selected-lock-btn" class="rounded px-1 hover:bg-accent" @click.stop="onToggleLock(it.module.id)">{{ it.locked ? '🔒' : '🔓' }}</button>
+                <button data-testid="selected-remove-btn" class="rounded px-1 hover:bg-accent hover:text-destructive" @click.stop="onSelectedRemove(it.module.id)">✕</button>
               </div>
               <div class="ml-6 flex items-center gap-1.5 text-xs text-muted-foreground">
                 <span class="rounded bg-background/60 px-1 py-0.5 font-mono text-[11px]">{{ it.module.dimensionKey ?? '未分类' }}</span>
@@ -601,5 +822,31 @@ defineExpose({ refresh, keyword, allowNsfw, dimensions, modulesByDim, onCreateDi
     <!-- 保存弹窗（从画布迁移） -->
     <SaveDialog :open="showSaveDialog" mode="assembly" @update:open="showSaveDialog = $event" @confirm="onSaveConfirm" />
     <SaveDialog :open="showTemplateDialog" mode="template" @update:open="showTemplateDialog = $event" @confirm="onTemplateConfirm" />
+
+    <!-- need05: 权重浮窗 Teleport 到 body 的 fixed 层 -->
+    <Teleport to="body">
+      <div
+        v-if="activeWeightId"
+        data-testid="selected-weight-popover"
+        class="fixed z-[70] flex w-56 flex-col gap-2 rounded-md border bg-popover p-3 shadow-xl"
+        :style="{ top: weightPos.top + 'px', left: weightPos.left + 'px' }"
+        @click.stop
+      >
+        <p class="text-xs font-medium">权重 0.5 – 2.0 · 步进 0.1</p>
+        <div class="flex items-center gap-2">
+          <input data-testid="weight-slider" type="range" min="0.5" max="2.0" step="0.1" :value="String(draftWeight)" class="flex-1 accent-primary" @input="onSliderInput" />
+          <span class="w-8 text-center font-mono text-xs">{{ draftWeight.toFixed(1) }}</span>
+        </div>
+        <div class="flex items-center gap-2">
+          <Input data-testid="weight-input" type="number" :model-value="String(draftWeight)" :value="String(draftWeight)" min="0.5" max="2.0" step="0.1" class="h-7 flex-1 text-xs" @input="onDraftInput" />
+        </div>
+        <div class="flex justify-end gap-1.5">
+          <Button size="sm" variant="ghost" class="h-7 text-xs" data-testid="weight-cancel" @click="cancelWeight">取消</Button>
+          <Button size="sm" class="h-7 text-xs" data-testid="weight-confirm" @click="confirmWeight(activeWeightId!)">确定</Button>
+        </div>
+      </div>
+    </Teleport>
+
+    
   </section>
 </template>
