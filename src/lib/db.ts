@@ -648,3 +648,43 @@ export async function dbGetTempCarry(): Promise<{ selectedItemIds: string[]; wei
   const r = await invoke<{ payloadJson: string | null }>('db_get_temp_carry')
   return r.payloadJson ? JSON.parse(r.payloadJson) as { selectedItemIds: string[]; weightDraft?: Record<string, number> } : null
 }
+
+// ------------------------------------------------------------------
+// Need01 — 批量翻译回填 displayName
+// ------------------------------------------------------------------
+export type TranslationUpdateItem = {
+  id: string
+  displayName: string
+}
+export type TranslationUpdatePayload = {
+  dimensionId: string
+  items: TranslationUpdateItem[]
+}
+export type TranslationUpdateReport = {
+  totalRequested: number
+  updated: number
+  skipped: number
+  warnings: string[]
+  errors: string[]
+}
+
+export async function dbBatchUpdateDisplayNames(
+  payload: TranslationUpdatePayload,
+): Promise<TranslationUpdateReport> {
+  return invoke<TranslationUpdateReport>('db_batch_update_display_names', {
+    payload: {
+      dimensionId: payload.dimensionId,
+      items: payload.items.map((i) => ({ id: i.id, displayName: i.displayName })),
+    },
+  })
+}
+
+export async function dbBatchUpdateDisplayNamesText(
+  text: string,
+  dimensionId: string,
+): Promise<TranslationUpdateReport> {
+  return invoke<TranslationUpdateReport>('db_batch_update_display_names_text', {
+    text,
+    dimensionId,
+  })
+}

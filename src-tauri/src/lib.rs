@@ -95,7 +95,9 @@ pub fn run() {
             commands::business::db_update_registry_meta,
             commands::export::db_get_default_export_dir,
             commands::export::db_export_library_to_dir,
-            commands::export::db_reveal_in_explorer
+            commands::export::db_reveal_in_explorer,
+            commands::translation::db_batch_update_display_names,
+            commands::translation::db_batch_update_display_names_text
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
