@@ -20,7 +20,8 @@ import { useToast } from '@/composables/useToast'
 import { emit, LIBRARY_CHANGED } from '@/lib/libraryEvents'
 import { dimColor } from '@/lib/utils'
 import type { Dimension, Module } from '@/engine/models'
-import { calcPopoverPos, POPOVER_W, POPOVER_H_EST } from '@/lib/need05Position'
+import { calcPopoverPos, POPOVER_W, POPOVER_H_EST, MENU_W, MENU_H_EST, calcMenuPos } from '@/lib/need05Position'
+import DimensionTranslateDialog from '@/components/DimensionTranslateDialog.vue'
 import { useLibraryStore } from '@/stores/library'
 import { useDimensionPanelStore } from '@/stores/dimensionPanel'
 
@@ -558,6 +559,69 @@ async function refresh(): Promise<void> {
   await library.fetchAll()
 }
 
+// Need01 — 维度右键菜单与翻译对话框
+const contextMenu = ref<{ key: string; x: number; y: number; dim: Dimension } | null>(null)
+const menuPos = ref<{ top: number; left: number }>({ top: 0, left: 0 })
+const showTranslateDialog = ref(false)
+const translateTarget = ref<{ dim: Dimension; modules: Module[] } | null>(null)
+
+function onDimContextMenu(e: MouseEvent, dim: Dimension): void {
+  e.preventDefault()
+  contextMenu.value = { key: dim.key, x: e.clientX, y: e.clientY, dim }
+  const vw = typeof window !== 'undefined' ? window.innerWidth : 1024
+  const vh = typeof window !== 'undefined' ? window.innerHeight : 768
+  menuPos.value = calcMenuPos(e.clientX, e.clientY, MENU_W, MENU_H_EST, vw, vh)
+}
+function closeContextMenu(): void { contextMenu.value = null }
+function onTranslateFromMenu(): void {
+  const cur = contextMenu.value
+  if (!cur) return
+  translateTarget.value = { dim: cur.dim, modules: [...(modulesByDim.value[cur.dim.id] ?? [])] }
+  showTranslateDialog.value = true
+  closeContextMenu()
+}
+async function onCopyDimKey(key: string): Promise<void> {
+  try { await navigator.clipboard.writeText(key); push(`已复制维度键名 ${key}`, 'success', 1500) }
+  catch { push('复制失败', 'warning') }
+  closeContextMenu()
+}
+async function onCopyDimName(nameCn: string): Promise<void> {
+  try { await navigator.clipboard.writeText(nameCn); push(`已复制维度中文名 ${nameCn}`, 'success', 1500) }
+  catch { push('复制失败', 'warning') }
+  closeContextMenu()
+}
+function onDocClickForMenu(e: MouseEvent): void {
+  if (!contextMenu.value) return
+  const menu = typeof document !== 'undefined' ? document.querySelector<HTMLElement>('[data-testid="dim-context-menu"]') : null
+  if (menu?.contains(e.target as Node)) return
+  closeContextMenu()
+}
+function onDocKeydownForMenu(e: KeyboardEvent): void {
+  if (e.key === 'Escape' && contextMenu.value) closeContextMenu()
+}
+function onScrollOrResizeForMenu(): void { if (contextMenu.value) closeContextMenu() }
+watch(contextMenu, (v) => {
+  if (typeof document === 'undefined') return
+  if (v) {
+    document.addEventListener('click', onDocClickForMenu)
+    document.addEventListener('keydown', onDocKeydownForMenu)
+    window.addEventListener('scroll', onScrollOrResizeForMenu, true)
+    window.addEventListener('resize', onScrollOrResizeForMenu)
+  } else {
+    document.removeEventListener('click', onDocClickForMenu)
+    document.removeEventListener('keydown', onDocKeydownForMenu)
+    window.removeEventListener('scroll', onScrollOrResizeForMenu, true)
+    window.removeEventListener('resize', onScrollOrResizeForMenu)
+  }
+})
+onBeforeUnmount(() => {
+  if (typeof document === 'undefined') return
+  document.removeEventListener('click', onDocClickForMenu)
+  document.removeEventListener('keydown', onDocKeydownForMenu)
+  window.removeEventListener('scroll', onScrollOrResizeForMenu, true)
+  window.removeEventListener('resize', onScrollOrResizeForMenu)
+})
+
 // App 负责首帧加载；独立挂载/测试时由兼容层触发同一 library 链路。
 onMounted(() => {
   if (library.dimensions.length === 0 && !library.loading) void library.fetchAll()
@@ -641,8 +705,9 @@ defineExpose({ refresh, keyword, allowNsfw, dimensions, modulesByDim, onCreateDi
               :data-dim-key="dim.key"
               class="flex w-full items-center justify-between px-3 py-2 text-left hover:bg-accent/50"
               :class="!dim.isEnabled ? 'opacity-60' : ''"
-              :title="!dim.isEnabled ? '已禁用，不参与可控随机 — Ctrl+点击可启用' : 'Ctrl+点击可禁用'"
+              :title="!dim.isEnabled ? '已禁用，不参与可控随机 — Ctrl+点击可启用' : 'Ctrl+点击可禁用 · 右键更多'"
               @click="onDimHeaderClick($event, dim)"
+              @contextmenu.prevent="onDimContextMenu($event, dim)"
             >
               <div class="flex min-w-0 items-center gap-2">
                 <span class="shrink-0 text-xs text-muted-foreground">{{ isExpanded(dim.key) ? '▾' : '▸' }}</span>
@@ -822,6 +887,40 @@ defineExpose({ refresh, keyword, allowNsfw, dimensions, modulesByDim, onCreateDi
     <!-- 保存弹窗（从画布迁移） -->
     <SaveDialog :open="showSaveDialog" mode="assembly" @update:open="showSaveDialog = $event" @confirm="onSaveConfirm" />
     <SaveDialog :open="showTemplateDialog" mode="template" @update:open="showTemplateDialog = $event" @confirm="onTemplateConfirm" />
+
+    <!-- Need01: 维度右键菜单（Teleport + calcMenuPos） -->
+    <Teleport to="body">
+      <div
+        v-if="contextMenu"
+        data-testid="dim-context-menu"
+        :data-dim-key="contextMenu.key"
+        class="fixed z-[70] w-52 rounded-md border bg-popover p-1 shadow-xl"
+        :style="{ top: menuPos.top + 'px', left: menuPos.left + 'px' }"
+        role="menu"
+        @click.stop
+      >
+        <button
+          :data-testid="`dim-ctx-translate-${contextMenu.key}`"
+          role="menuitem"
+          class="flex w-full items-center rounded px-3 py-2 text-left text-sm hover:bg-accent disabled:opacity-50"
+          :disabled="(modulesByDim[contextMenu.dim.id]?.length ?? 0) === 0"
+          :title="(modulesByDim[contextMenu.dim.id]?.length ?? 0) === 0 ? '该维度暂无词条' : '批量翻译本维度中文描述'"
+          @click="onTranslateFromMenu"
+        >批量翻译（中文描述）</button>
+        <div class="my-1 border-t" />
+        <button :data-testid="`dim-ctx-copy-key-${contextMenu.key}`" role="menuitem" class="flex w-full rounded px-3 py-1.5 text-left text-xs hover:bg-accent" @click="onCopyDimKey(contextMenu.key)">复制维度键名</button>
+        <button :data-testid="`dim-ctx-copy-name-${contextMenu.key}`" role="menuitem" class="flex w-full rounded px-3 py-1.5 text-left text-xs hover:bg-accent" @click="onCopyDimName(contextMenu.dim.nameCn)">复制维度中文名</button>
+      </div>
+    </Teleport>
+
+    <!-- Need01: 批量翻译对话框 -->
+    <DimensionTranslateDialog
+      :open="showTranslateDialog"
+      :dimension="translateTarget?.dim ?? null"
+      :modules="translateTarget?.modules ?? []"
+      @update:open="showTranslateDialog = $event"
+      @applied="() => { /* library 已通过事件刷新 */ }"
+    />
 
     <!-- need05: 权重浮窗 Teleport 到 body 的 fixed 层 -->
     <Teleport to="body">
