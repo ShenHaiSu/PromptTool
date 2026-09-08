@@ -59,6 +59,38 @@ export interface IRSegment {
   sourceModuleId: string
 }
 
+/** need02 IR v2 快照版本（03 §8） */
+export const IR_SNAPSHOT_VERSION = 2
+
+// ---- need02 IR v2：结构化冲突发现（03 §1 唯一口径） ----
+export type RuleType = 'mutex' | 'requires' | 'excludes' | 'limit' | 'isolated'
+export type FindingSeverity = 'error' | 'warning'
+
+export interface FindingFix {
+  /** 建议移除的 segment 下标（指向 draft.segments 索引，应用时需按快照解析） */
+  removeIndexes: number[]
+  /** 保留的 segment 下标（用于展示“将保留…”，可为空） */
+  keepIndexes: number[]
+  /** 人话解释，如 “将移除上装/下装，保留全身套装” */
+  reason: string
+}
+
+export interface Finding {
+  ruleId: string
+  ruleName: string
+  type: RuleType
+  severity: FindingSeverity
+  message: string
+  /** 涉及的 segment 下标 */
+  involvedIndexes: number[]
+  /** 涉及的模块 id（快照可得即填，否则为空数组） */
+  involvedModuleIds: string[]
+  /** 为空表示该冲突无一键修复，只能手动改/忽略 */
+  fix: FindingFix | null
+  /** 用户手动忽略后由编辑器填入，引擎不消费；不落盘 */
+  ignored?: boolean
+}
+
 // ---- Pure-JS MD5 (synchronous) — 与 Python hashlib.md5 保持一致 ----
 function md5Hex(str: string): string {
   // Minimal MD5 implementation (based on RFC 1321, public domain)
@@ -192,13 +224,19 @@ function md5Hex(str: string): string {
 export class PromptIR {
   segments: IRSegment[]
   warnings: string[]
+  /** need02 IR v2：结构化冲突发现，默认 []（03 §1） */
+  findings: Finding[]
+  /** 快照版本：老快照缺省视为 1（03 §7 前向兼容） */
+  version: number
 
-  constructor(segments: IRSegment[] = [], warnings: string[] = []) {
+  constructor(segments: IRSegment[] = [], warnings: string[] = [], findings: Finding[] = [], version: number = IR_SNAPSHOT_VERSION) {
     this.segments = segments
     this.warnings = warnings
+    this.findings = findings
+    this.version = version
   }
 
-  /** 与 Python hashlib.md5("|".join(f"{d}:{t}:{w}")) 一致，去重用 — w 保留 1 位小数 */
+  /** 与 Python hashlib.md5("|".join(f"{d}:{t}:{w}")) 一致，去重用 — w 保留 1 位小数，不含 findings */
   hash(): string {
     const parts: [string, string, string][] = this.segments.map((s) => [
       s.dimensionKey,
@@ -210,7 +248,7 @@ export class PromptIR {
   }
 
   toJSON() {
-    return { segments: this.segments, warnings: this.warnings }
+    return { segments: this.segments, warnings: this.warnings, findings: this.findings, version: this.version }
   }
 }
 
