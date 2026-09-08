@@ -5,7 +5,10 @@ import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
 import { useToast } from '@/composables/useToast'
 import { exportSingleCsv } from '@/lib/export'
+import { evaluateRules } from '@/engine/ruleEngine'
+import { useRulesStore } from '@/stores/rules'
 import type { PromptIR } from '@/engine/models'
+import IrConflictEditorDialog from './IrConflictEditorDialog.vue'
 
 const props = withDefaults(defineProps<{
   open: boolean
@@ -25,12 +28,41 @@ const emit = defineEmits<{
 
 const expanded = ref(false)
 const showIr = ref(false)
+const showIrEditor = ref(false)
 const { push } = useToast()
+
+let rulesStore: ReturnType<typeof useRulesStore> | null = null
+function getRulesStore(): ReturnType<typeof useRulesStore> | null {
+  try {
+    rulesStore ??= useRulesStore()
+    return rulesStore
+  } catch { return null }
+}
+
+// need02：badge 优先读 findings（✓/⚠/⛔），fallback 老关键字分类
+const liveFindings = computed(() => {
+  if (!props.ir) return []
+  try {
+    const store = getRulesStore()
+    const rules = store ? store.toEngineRules() : []
+    if (rules.length === 0) return props.ir.findings ?? []
+    return evaluateRules({ segments: props.ir.segments, rules })
+  } catch { return props.ir.findings ?? [] }
+})
+
+const badgeVariant = computed(() => {
+  if (liveFindings.value.some((f) => f.severity === 'error')) return 'destructive'
+  if (liveFindings.value.length > 0 || hasWarnings.value) return 'destructive'
+  return 'secondary'
+})
 
 const isEmpty = computed(() => !props.prompt?.trim())
 const hasWarnings = computed(() => (props.warnings?.length ?? 0) > 0)
 
 const badgeText = computed(() => {
+  const live = liveFindings.value
+  if (live.some((f) => f.severity === 'error')) return `⛔ ${live.length} 错误`
+  if (live.length > 0) return `⚠ ${live.length} 冲突`
   const n = props.warnings?.length ?? 0
   if (n === 0) return '✓ 无冲突'
   const first = props.warnings![0] ?? ''
@@ -99,7 +131,16 @@ function onExport(): void {
 }
 
 function onKeydown(e: KeyboardEvent): void {
-  if (e.key === 'Escape') onClose()
+  if (e.key === 'Escape') {
+    if (showIrEditor.value) return // 编辑器自行处理 Esc
+    onClose()
+  }
+}
+
+function onOpenIrEditor(): void {
+  const store = getRulesStore()
+  if (store && !store.loaded) void store.fetchAll().catch(() => { /* 编辑器内展示 loadError */ })
+  showIrEditor.value = true
 }
 </script>
 
@@ -120,11 +161,12 @@ function onKeydown(e: KeyboardEvent): void {
       <div class="flex items-center justify-between">
         <div class="flex items-center gap-2">
           <h3 class="text-sm font-semibold">预览</h3>
-          <Badge :variant="hasWarnings ? 'destructive' : 'secondary'" data-testid="preview-badge">{{ badgeText }}</Badge>
+          <Badge :variant="badgeVariant" data-testid="preview-badge">{{ badgeText }}</Badge>
         </div>
         <div class="flex items-center gap-1">
           <Button data-testid="preview-copy-btn" variant="outline" size="sm" class="h-7 text-xs" :disabled="isEmpty" @click="onCopy">复制</Button>
           <Button data-testid="preview-export-btn" variant="outline" size="sm" class="h-7 text-xs" :disabled="isEmpty" @click="onExport">导出</Button>
+          <Button data-testid="ir-editor-open" variant="outline" size="sm" class="h-7 text-xs" :disabled="!ir" title="打开 IR 冲突编辑器：分段改字/改权重/删段/排序，一键修复冲突" @click="onOpenIrEditor">冲突编辑</Button>
           <Button variant="ghost" size="sm" class="h-7 w-7 p-0" @click="onClose">✕</Button>
         </div>
       </div>
@@ -164,5 +206,8 @@ function onKeydown(e: KeyboardEvent): void {
         <Button data-testid="preview-close-btn" variant="outline" size="sm" class="h-7 text-xs" @click="onClose">关闭</Button>
       </div>
     </Card>
+
+    <!-- need02：IR 冲突编辑器（applied 后预览由 assembly 真源自动更新） -->
+    <IrConflictEditorDialog :open="showIrEditor" :ir="ir" @update:open="showIrEditor = $event" />
   </div>
 </template>
