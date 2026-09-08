@@ -106,4 +106,33 @@ describe('lib/db invoke mapping', () => {
     await dbRevealInExplorer('E:/app/data/output/pm.json')
     expect(mockInvoke).toHaveBeenCalledWith('db_reveal_in_explorer', { path: 'E:/app/data/output/pm.json' })
   })
+
+  it('dbListRules passes includeDisabled (camelCase)', async () => {
+    const { dbListRules } = await import('./db')
+    mockInvoke.mockResolvedValueOnce([])
+    await dbListRules(false)
+    expect(mockInvoke).toHaveBeenCalledWith('db_list_rules', { includeDisabled: false })
+  })
+
+  it('dbUpdateRule spreads id and payload flat (pitfalls/01)', async () => {
+    const { dbUpdateRule } = await import('./db')
+    const payload = { name: 'n', type: 'mutex' as const, sourceDimensionId: 'dim_05', sourceModuleId: null, targetDimensionId: 'dim_03', targetModuleId: null, message: 'm', isEnabled: true }
+    mockInvoke.mockResolvedValueOnce({ id: 'rule_01', ...payload })
+    await dbUpdateRule('rule_01', payload)
+    expect(mockInvoke).toHaveBeenCalledWith('db_update_rule', { id: 'rule_01', payload })
+  })
+
+  it('dbToggleRule spreads id and isEnabled flat', async () => {
+    const { dbToggleRule, dbCreateRule, dbDeleteRule } = await import('./db')
+    mockInvoke.mockResolvedValueOnce({ id: 'r', isEnabled: false })
+    await dbToggleRule('r', false)
+    expect(mockInvoke).toHaveBeenCalledWith('db_toggle_rule', { id: 'r', isEnabled: false })
+    mockInvoke.mockResolvedValueOnce({ id: 'r2' })
+    const payload = { name: 'n', type: 'mutex' as const, sourceDimensionId: null, sourceModuleId: null, targetDimensionId: null, targetModuleId: null, message: 'm', isEnabled: true }
+    await dbCreateRule(payload)
+    expect(mockInvoke).toHaveBeenCalledWith('db_create_rule', { payload })
+    mockInvoke.mockResolvedValueOnce(undefined)
+    await dbDeleteRule('r2')
+    expect(mockInvoke).toHaveBeenCalledWith('db_delete_rule', { id: 'r2' })
+  })
 })

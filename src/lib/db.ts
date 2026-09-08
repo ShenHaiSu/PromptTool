@@ -688,3 +688,42 @@ export async function dbBatchUpdateDisplayNamesText(
     dimensionId,
   })
 }
+
+// ------------------------------------------------------------------
+// need02 规则 CRUD（03 §7 唯一口径：invoke 实参全 camelCase 平铺）
+// ------------------------------------------------------------------
+import type { RuleType } from '@/engine/models'
+
+export type RuleDto = {
+  id: string
+  name: string
+  type: RuleType
+  sourceDimensionId: string | null
+  sourceModuleId: string | null
+  targetDimensionId: string | null
+  targetModuleId: string | null
+  message: string
+  isEnabled: boolean
+}
+
+export type RuleUpsertPayload = Omit<RuleDto, 'id'>
+
+export async function dbListRules(includeDisabled = true): Promise<RuleDto[]> {
+  return invoke<RuleDto[]>('db_list_rules', { includeDisabled })
+}
+
+export async function dbCreateRule(payload: RuleUpsertPayload): Promise<RuleDto> {
+  return invoke<RuleDto>('db_create_rule', { payload })
+}
+
+export async function dbUpdateRule(id: string, payload: RuleUpsertPayload): Promise<RuleDto> {
+  return invoke<RuleDto>('db_update_rule', { id, payload })
+}
+
+export async function dbDeleteRule(id: string): Promise<void> {
+  await invoke('db_delete_rule', { id })
+}
+
+export async function dbToggleRule(id: string, isEnabled: boolean): Promise<RuleDto> {
+  return invoke<RuleDto>('db_toggle_rule', { id, isEnabled })
+}

@@ -1,14 +1,17 @@
 <script setup lang="ts">
-import { ref } from 'vue'
+import { ref, computed } from 'vue'
 import { Card } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { useToast } from '@/composables/useToast'
 import { useAssemblyStore } from '@/stores/assembly'
 import { useHistoryStore } from '@/stores/history'
+import { useRulesStore } from '@/stores/rules'
 import { dimColor } from '@/lib/utils'
+import { evaluateRules } from '@/engine/ruleEngine'
 import type { BatchCardModel } from '@/engine/models'
 import { dbSaveAssemblyFromIr } from '@/lib/db'
+import IrConflictEditorDialog from './IrConflictEditorDialog.vue'
 
 const props = withDefaults(defineProps<{ model: BatchCardModel; index: number }>(), {
   index: 1,
@@ -22,6 +25,37 @@ const historyStore = useHistoryStore()
 
 const copied = ref(false)
 const favorited = ref(false)
+const showIrEditor = ref(false)
+
+// need02：只读 findings（同步计算，不阻塞生成主链路；规则未加载时回退 warnings）
+let rulesStore: ReturnType<typeof useRulesStore> | null = null
+function getRulesStore(): ReturnType<typeof useRulesStore> | null {
+  try {
+    rulesStore ??= useRulesStore()
+    return rulesStore
+  } catch { return null }
+}
+const cardFindings = computed(() => {
+  const fromIr = props.model.ir.findings?.filter((f) => !f.ignored) ?? []
+  if (fromIr.length > 0) return fromIr
+  try {
+    const store = getRulesStore()
+    const rules = store ? store.toEngineRules() : []
+    if (rules.length === 0) return []
+    return evaluateRules({ segments: props.model.ir.segments, rules })
+  } catch { return [] }
+})
+const findingLine = computed(() => {
+  if (cardFindings.value.length > 0) return cardFindings.value[0]!.message
+  if (props.model.warnings.length > 0) return props.model.warnings.join('；')
+  return ''
+})
+
+function onEditCard(): void {
+  const store = getRulesStore()
+  if (store && !store.loaded) void store.fetchAll().catch(() => {})
+  showIrEditor.value = true
+}
 
 async function onCopy(): Promise<void> {
   const text = props.model.finalPrompt
@@ -111,6 +145,7 @@ function onCardClick(e: MouseEvent): void {
         <Button data-testid="batch-card-refill" size="sm" variant="outline" class="h-6 px-2 text-xs" title="回填到画布" @click.stop="onRefill"
           >↩ 回填</Button
         >
+        <Button data-testid="batch-card-edit" size="sm" variant="outline" class="h-6 px-2 text-xs" title="在 IR 冲突编辑器中打开本卡" @click.stop="onEditCard">编辑</Button>
       </div>
     </div>
     <p
@@ -120,8 +155,8 @@ function onCardClick(e: MouseEvent): void {
     >
       {{ model.finalPrompt }}
     </p>
-    <div v-if="model.warnings.length" class="mt-1 text-[11px] text-amber-600 dark:text-amber-400">
-      ⚠ {{ model.warnings.join('；') }}
+    <div v-if="findingLine" class="mt-1 text-[11px] text-amber-600 dark:text-amber-400">
+      ⚠ {{ findingLine }}
     </div>
     <div class="mt-2 flex flex-wrap gap-1">
       <Badge
@@ -132,7 +167,9 @@ function onCardClick(e: MouseEvent): void {
         :style="{ background: dimColor(k) }"
         :title="k"
         >{{ k }}</Badge
-      >
+        >
     </div>
+    <!-- need02：编辑器 applied 后提供“回填到画布”（首版明确：仅回填，不做更新本卡） -->
+    <IrConflictEditorDialog :open="showIrEditor" :ir="model.ir" @update:open="showIrEditor = $event" />
   </Card>
 </template>

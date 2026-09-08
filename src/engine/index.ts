@@ -1,4 +1,6 @@
 export * from './models'
+export * from './ruleTypes'
+export * from './irCodec'
 export * from './assembly'
 export * from './rules'
 export * from './adapters'
