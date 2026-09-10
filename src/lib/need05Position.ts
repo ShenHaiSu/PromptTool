@@ -6,7 +6,7 @@ export const POPOVER_W = 224
 export const POPOVER_H_EST = 180
 export const GAP = 8
 export const MENU_W = 180
-export const MENU_H_EST = 80
+export const MENU_H_EST = 110
 
 export function calcPopoverPos(
   anchor: { top: number; bottom: number; left: number },

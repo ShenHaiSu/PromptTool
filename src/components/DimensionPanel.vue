@@ -22,6 +22,7 @@ import { dimColor } from '@/lib/utils'
 import type { Dimension, Module } from '@/engine/models'
 import { calcPopoverPos, POPOVER_W, POPOVER_H_EST, MENU_W, MENU_H_EST, calcMenuPos } from '@/lib/need05Position'
 import DimensionTranslateDialog from '@/components/DimensionTranslateDialog.vue'
+import DimensionGenerateDialog from '@/components/DimensionGenerateDialog.vue'
 import { useLibraryStore } from '@/stores/library'
 import { useDimensionPanelStore } from '@/stores/dimensionPanel'
 
@@ -564,6 +565,9 @@ const contextMenu = ref<{ key: string; x: number; y: number; dim: Dimension } | 
 const menuPos = ref<{ top: number; left: number }>({ top: 0, left: 0 })
 const showTranslateDialog = ref(false)
 const translateTarget = ref<{ dim: Dimension; modules: Module[] } | null>(null)
+// Need03 — 片段批量生成对话框
+const showGenerateDialog = ref(false)
+const generateTarget = ref<{ dim: Dimension; modules: Module[] } | null>(null)
 
 function onDimContextMenu(e: MouseEvent, dim: Dimension): void {
   e.preventDefault()
@@ -578,6 +582,14 @@ function onTranslateFromMenu(): void {
   if (!cur) return
   translateTarget.value = { dim: cur.dim, modules: [...(modulesByDim.value[cur.dim.id] ?? [])] }
   showTranslateDialog.value = true
+  closeContextMenu()
+}
+// Need03 — 空维度也可用（空维度最需要生成），与翻译项禁用相反
+function onGenerateFromMenu(): void {
+  const cur = contextMenu.value
+  if (!cur) return
+  generateTarget.value = { dim: cur.dim, modules: [...(modulesByDim.value[cur.dim.id] ?? [])] }
+  showGenerateDialog.value = true
   closeContextMenu()
 }
 async function onCopyDimKey(key: string): Promise<void> {
@@ -907,6 +919,13 @@ defineExpose({ refresh, keyword, allowNsfw, dimensions, modulesByDim, onCreateDi
           :title="(modulesByDim[contextMenu.dim.id]?.length ?? 0) === 0 ? '该维度暂无词条' : '批量翻译本维度中文描述'"
           @click="onTranslateFromMenu"
         >批量翻译（中文描述）</button>
+        <button
+          :data-testid="`dim-ctx-generate-${contextMenu.key}`"
+          role="menuitem"
+          title="按倾向为该维度批量生成新片段"
+          class="flex w-full items-center rounded px-3 py-2 text-left text-sm hover:bg-accent"
+          @click="onGenerateFromMenu"
+        >✨ 片段批量生成</button>
         <div class="my-1 border-t" />
         <button :data-testid="`dim-ctx-copy-key-${contextMenu.key}`" role="menuitem" class="flex w-full rounded px-3 py-1.5 text-left text-xs hover:bg-accent" @click="onCopyDimKey(contextMenu.key)">复制维度键名</button>
         <button :data-testid="`dim-ctx-copy-name-${contextMenu.key}`" role="menuitem" class="flex w-full rounded px-3 py-1.5 text-left text-xs hover:bg-accent" @click="onCopyDimName(contextMenu.dim.nameCn)">复制维度中文名</button>
@@ -920,6 +939,15 @@ defineExpose({ refresh, keyword, allowNsfw, dimensions, modulesByDim, onCreateDi
       :modules="translateTarget?.modules ?? []"
       @update:open="showTranslateDialog = $event"
       @applied="() => { /* library 已通过事件刷新 */ }"
+    />
+
+    <!-- Need03: 片段批量生成对话框 -->
+    <DimensionGenerateDialog
+      :open="showGenerateDialog"
+      :dimension="generateTarget?.dim ?? null"
+      :modules="generateTarget?.modules ?? []"
+      @update:open="showGenerateDialog = $event"
+      @imported="() => { /* library 已通过事件刷新 */ }"
     />
 
     <!-- need05: 权重浮窗 Teleport 到 body 的 fixed 层 -->
