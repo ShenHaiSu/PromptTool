@@ -45,15 +45,12 @@ describe('LibraryDialog — Need02 导出落盘与文件夹自选', () => {
     w.unmount()
   })
 
-  it('选择文件夹：open 返回 string 时回填并写 localStorage', async () => {
-    const dialogMod: any = await import('@tauri-apps/plugin-dialog')
-    dialogMod.open.mockResolvedValueOnce('D:/tmp/pmf-out')
+  it('纯 Web 下选择文件夹降级为提示（不写 localStorage）', async () => {
     const w = mount(LibraryDialog, { props: {} })
     await flush(w)
     await w.find('[data-testid="library-export-pick-dir"]').trigger('click')
     await flush(w)
-    expect(localStorage.getItem('pmf:exportDir')).toBe('D:/tmp/pmf-out')
-    expect((w.find('[data-testid="library-export-dir"]').element as HTMLInputElement).value).toBe('D:/tmp/pmf-out')
+    expect(localStorage.getItem('pmf:exportDir')).toBeNull()
     w.unmount()
   })
 

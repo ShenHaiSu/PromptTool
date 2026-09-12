@@ -6,11 +6,13 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { mount } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
 
+const mockListRules = vi.fn()
 vi.mock('@/lib/db', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/db')>()
   return {
     ...actual,
     dbUpdateModule: vi.fn().mockResolvedValue(undefined),
+    dbListRules: (...args: unknown[]) => mockListRules(...args),
   }
 })
 
@@ -19,11 +21,6 @@ import { useRulesStore } from '@/stores/rules'
 import { useLibraryStore } from '@/stores/library'
 import { useAssemblyStore } from '@/stores/assembly'
 import IrConflictEditorDialog from '../IrConflictEditorDialog.vue'
-
-const mockInvoke = vi.fn()
-vi.mock('@tauri-apps/api/core', () => ({
-  invoke: (...args: unknown[]) => mockInvoke(...args),
-}))
 
 function cfg(): AssemblyConfig {
   return { separator: ', ', useWeightBrackets: true, modelProfile: 'sd', sortBy: 'dimensionOrder' }
@@ -51,8 +48,8 @@ async function mountEditor(ir: PromptIR | null = outfitTopIr()) {
     { id: 'dim_05', key: 'outfit', nameCn: '全身套装', nameEn: 'Outfit', sortOrder: 8, isMultiSelect: false, isEnabled: true },
     { id: 'dim_03', key: 'top', nameCn: '上装', nameEn: 'Top', sortOrder: 6, isMultiSelect: false, isEnabled: true },
   ] as typeof library.dimensions
-  mockInvoke.mockReset()
-  mockInvoke.mockResolvedValueOnce([
+  mockListRules.mockReset()
+  mockListRules.mockResolvedValueOnce([
     { id: 'rule_01a', name: '套装互斥·上装', type: 'mutex', sourceDimensionId: 'dim_05', sourceModuleId: null, targetDimensionId: 'dim_03', targetModuleId: null, message: '已选全身套装，上装将自动忽略', isEnabled: true },
   ])
   await rules.fetchAll()
