@@ -1,8 +1,8 @@
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref } from 'vue'
 import { Button } from '@/components/ui/button'
 import { useToast } from '@/composables/useToast'
-import { dbExportLibrary, dbImportLibraryText, dbGetDefaultExportDir, dbExportLibraryToDir, dbRevealInExplorer } from '@/lib/db'
+import { dbExportLibrary, dbImportLibraryText } from '@/lib/db'
 import type { ImportMode, LibraryImportReport } from '@/lib/db'
 
 const emit = defineEmits<{ (e: 'close'): void; (e: 'imported'): void }>()
@@ -10,7 +10,6 @@ const emit = defineEmits<{ (e: 'close'): void; (e: 'imported'): void }>()
 const { push } = useToast()
 const exporting = ref(false)
 const importing = ref(false)
-const pickingDir = ref(false)
 const mode = ref<ImportMode>('skip')
 const fileName = ref('')
 const report = ref<LibraryImportReport | null>(null)
@@ -18,85 +17,30 @@ const error = ref('')
 const showErrors = ref(false)
 const fileInput = ref<HTMLInputElement | null>(null)
 
-// Need02: export dir state
-const LS_KEY = 'pmf:exportDir'
-const exportDir = ref('')
-const defaultDir = ref('')
-const lastExportPath = ref<string | null>(null)
-const lastFilename = ref('')
-
-onMounted(async () => {
-  try {
-    const saved = localStorage.getItem(LS_KEY)
-    if (saved && saved.trim()) exportDir.value = saved.trim()
-  } catch { /* ignore */ }
-  try {
-    const d = await dbGetDefaultExportDir()
-    defaultDir.value = d
-    if (!exportDir.value) {
-      // keep empty so placeholder shows default; but store for fallback
-    }
-  } catch {
-    defaultDir.value = ''
-  }
-})
-
-async function onPickDir(): Promise<void> {
-  if (pickingDir.value || exporting.value) return
-  pickingDir.value = true
-  try {
-    // 纯 Web 阶段一：目录选择下线（阶段三浏览器化），直接用浏览器下载导出
-    push('纯 Web 版直接浏览器下载导出，无需选择文件夹', 'warning', 2500)
-  } catch (err) {
-    push(`选择文件夹失败: ${String(err)}`, 'error')
-  } finally {
-    pickingDir.value = false
-  }
+function blobFilename(prefix: string, ext: string): string {
+  const d = new Date()
+  const pad = (n: number): string => String(n).padStart(2, '0')
+  const ts = `${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}-${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}`
+  return `${prefix}-${ts}.${ext}`
 }
 
 function triggerBlobDownload(json: string): void {
   const blob = new Blob([json], { type: 'application/json' })
   const url = URL.createObjectURL(blob)
   const a = document.createElement('a')
-  const d = new Date()
-  const pad = (n: number): string => String(n).padStart(2, '0')
   a.href = url
-  a.download = `pmf-library-${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}-${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}.json`
+  a.download = blobFilename('pmf-library', 'json')
   document.body.appendChild(a)
   a.click()
   document.body.removeChild(a)
   URL.revokeObjectURL(url)
 }
 
-/** 导出词库：优先落盘到目录，失败则 Blob 降级 */
+/** 导出词库：纯 Web Blob 下载（阶段三；无落盘/目录概念）。 */
 async function onExport(): Promise<void> {
+  if (exporting.value) return
   exporting.value = true
   try {
-    const targetDir = exportDir.value.trim() || defaultDir.value.trim()
-    // Empty targetDir -> treat as default (backend will handle empty as default)
-    if (targetDir) {
-      try {
-        const res = await dbExportLibraryToDir(targetDir)
-        lastExportPath.value = res.path
-        lastFilename.value = res.filename
-        push(`已导出至 ${res.path}`, 'success', 2500)
-        return
-      } catch (err) {
-        // fall through to Blob fallback, but toast warning context
-        const msg = String(err)
-        // Try Blob fallback with same JSON if available via plain export
-        try {
-          const json = await dbExportLibrary()
-          triggerBlobDownload(json)
-          push(`已通过浏览器下载导出（落盘失败，已自动降级）: ${msg}`, 'warning', 4000)
-          return
-        } catch (e2) {
-          push(`导出失败: ${msg} / 降级亦失败: ${String(e2)}`, 'error', 4000)
-          return
-        }
-      }
-    }
-    // No targetDir (default unknown) -> legacy Blob path
     const json = await dbExportLibrary()
     triggerBlobDownload(json)
     push('词库已导出为 JSON', 'success', 1500)
@@ -104,17 +48,6 @@ async function onExport(): Promise<void> {
     push(`导出失败: ${String(err)}`, 'error')
   } finally {
     exporting.value = false
-  }
-}
-
-async function onOpenDir(): Promise<void> {
-  const p = lastExportPath.value
-  if (!p) return
-  try {
-    await dbRevealInExplorer(p)
-  } catch (err) {
-    // 纯 Web：无系统文件管理器打开能力
-    push(`纯 Web 版不支持打开系统文件夹: ${String(err)}`, 'warning', 2500)
   }
 }
 
@@ -169,35 +102,10 @@ const totalErrors = (): number => report.value?.errors.length ?? 0
         <!-- 导出 -->
         <section data-testid="library-export-section">
           <p class="mb-2 text-sm font-medium text-muted-foreground">导出（标准 JSON，可跨实例导入）</p>
-          <!-- Need02: 输出文件夹选择 -->
-          <div class="mb-2 flex items-center gap-2">
-            <input
-              data-testid="library-export-dir"
-              :value="exportDir || defaultDir"
-              :title="exportDir || defaultDir"
-              :placeholder="defaultDir ? `默认：${defaultDir}` : '默认：…/data/output'"
-              readonly
-              class="flex-1 truncate rounded-md border bg-muted/30 px-2 py-1.5 text-xs text-muted-foreground"
-            />
-            <Button
-              data-testid="library-export-pick-dir"
-              variant="outline"
-              size="sm"
-              :disabled="exporting || pickingDir"
-              @click="onPickDir"
-            >
-              {{ pickingDir ? '选择中…' : '选择文件夹' }}
-            </Button>
-          </div>
-          <p class="mb-2 text-xs text-muted-foreground">提示：默认 data/output；已选目录将自动记忆</p>
           <Button data-testid="library-export-btn" variant="outline" size="sm" :disabled="exporting" @click="onExport">
             {{ exporting ? '导出中…' : '导出词库 JSON' }}
           </Button>
-          <!-- Need02: 落盘结果 + 打开文件夹 -->
-          <div v-if="lastExportPath" data-testid="library-export-result" class="mt-2 rounded-md border bg-muted/30 px-2 py-2 text-xs">
-            <p class="break-all text-muted-foreground">已落盘至 {{ lastExportPath }}</p>
-            <Button data-testid="library-export-open-dir" variant="ghost" size="sm" class="mt-1 h-6 px-2 text-xs" @click="onOpenDir">打开文件夹</Button>
-          </div>
+          <p class="mt-2 text-xs text-muted-foreground">纯 Web 版通过浏览器下载保存文件，下载后请自行打开文件夹查看。</p>
         </section>
 
         <!-- 导入 -->
@@ -229,6 +137,9 @@ const totalErrors = (): number => report.value?.errors.length ?? 0
               覆盖重复
             </label>
           </div>
+          <p class="mt-2 text-xs text-muted-foreground">
+            旧数据迁移：Tauri 版 → 词库导出 JSON → Web 版在此导入。
+          </p>
         </section>
 
         <!-- 结果 -->

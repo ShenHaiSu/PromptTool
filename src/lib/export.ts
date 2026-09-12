@@ -1,7 +1,7 @@
 /**
  * CSV 导出 — 对标 src/exporter.py
  * 列：序号 / 提示词 / 维度构成 / 冲突警告
- * 前端 Blob 下载（UTF-8-BOM，Excel 可直接打开）；Tauri 侧亦提供 Rust db_export_csv 兜底
+ * 前端 Blob 下载（UTF-8-BOM，Excel 可直接打开）；纯 Web 唯一导出通道
  */
 import type { PromptIR } from '@/engine/models'
 
@@ -66,7 +66,7 @@ export function exportSingleCsv(ir: PromptIR, finalPrompt: string): void {
 }
 
 /**
- * 生成 CSV 文本（不下载），供 Rust db_export_csv 传入或测试校验
+ * 生成 CSV 文本（不下载），供测试校验
  * 含 BOM
  */
 export function buildCsvText(rows: ExportRow[]): string {

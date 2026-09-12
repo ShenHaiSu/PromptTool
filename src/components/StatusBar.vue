@@ -10,7 +10,7 @@ defineProps<{
   moduleCount: number
 }>()
 
-const emit = defineEmits<{ (e: 'toggle-library'): void; (e: 'toggle-segment-import'): void; (e: 'toggle-db-manager'): void }>()
+const emit = defineEmits<{ (e: 'toggle-library'): void; (e: 'toggle-segment-import'): void }>()
 
 const theme = useThemeStore()
 const assembly = useAssemblyStore()
@@ -52,16 +52,7 @@ const library = useLibraryStore()
       >
         📚 词库
       </Button>
-      <span class="hidden sm:inline">就绪 · Tauri P3</span>
-      <Button
-        data-testid="db-manager-toggle"
-        variant="ghost"
-        size="sm"
-        class="h-6 px-2 text-xs"
-        @click="emit('toggle-db-manager')"
-      >
-        🗄️ 数据库
-      </Button>
+      <span class="hidden sm:inline">就绪 · Web 版</span>
       <Button
         data-testid="theme-toggle"
         variant="ghost"

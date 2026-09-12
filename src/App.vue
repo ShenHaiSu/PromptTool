@@ -12,16 +12,13 @@ import { useSash } from '@/composables/useSash'
 import { appToasts, useToast } from '@/composables/useToast'
 import { useShortcuts } from '@/composables/useShortcuts'
 import { useThemeStore } from '@/stores/theme'
-import BusinessDbOnboardingDialog from '@/components/BusinessDbOnboardingDialog.vue'
-import DbManagerDrawer from '@/components/DbManagerDrawer.vue'
-import { useDbRegistryStore } from '@/stores/dbRegistry'
 import { useLibraryStore } from '@/stores/library'
 import { dbGetTempCarry } from '@/lib/db'
+import { copyText, manualCopyHint } from '@/lib/clipboard'
 import { on as onEvent, off as offEvent, LIBRARY_CHANGED } from '@/lib/libraryEvents'
 
 const assembly = useAssemblyStore()
 const historyStore = useHistoryStore()
-const dbRegistry = useDbRegistryStore()
 const themeStore = useThemeStore()
 const library = useLibraryStore()
 void themeStore.mode
@@ -46,15 +43,11 @@ function doSaveShortcut(): void {
 async function doCopyShortcut(): Promise<void> {
   const text = assembly.finalPrompt
   if (!text) { push('暂无可复制的 Prompt', 'warning'); return }
-  try {
-    await navigator.clipboard.writeText(text)
+  const res = await copyText(text)
+  if (res.ok) {
     push('已复制到剪贴板（Ctrl+C）', 'success', 1500)
-  } catch {
-    const ta = document.createElement('textarea')
-    ta.value = text; ta.style.position = 'fixed'; ta.style.opacity = '0'
-    document.body.appendChild(ta); ta.select()
-    document.execCommand('copy'); document.body.removeChild(ta)
-    push('已复制到剪贴板（Ctrl+C）', 'success', 1500)
+  } else {
+    push(manualCopyHint(), 'warning', 3000)
   }
 }
 function doRemoveShortcut(): void {
@@ -68,8 +61,6 @@ useShortcuts({ focusSearch, save: doSaveShortcut, copy: doCopyShortcut, remove: 
 
 const dimCount = ref(0)
 const moduleCount = ref(0)
-
-const showDbManager = ref(false)
 
 const showLibraryDialog = ref(false)
 const showSegmentImport = ref(false)
@@ -163,18 +154,7 @@ onMounted(async () => {
 
   onEvent(LIBRARY_CHANGED, handleLibraryChanged)
 
-  try {
-    await dbRegistry.fetchActiveInfo()
-    await dbRegistry.fetchList()
-    if (!dbRegistry.activeInfo?.foreground) {
-      dbRegistry.onboardingOpen = true
-      return
-    }
-  } catch {
-    dbRegistry.onboardingOpen = true
-    return
-  }
-
+  // 阶段三：纯 Web 单库模式，直接拉取 library + history（无多库 onboarding）
   try {
     // need06: library 是维度面板与随机侧的唯一数据源
     await library.fetchAll()
@@ -256,10 +236,7 @@ onBeforeUnmount(() => {
       </section>
     </div>
 
-    <StatusBar :dim-count="dimCount" :module-count="moduleCount" @toggle-library="toggleLibrary" @toggle-segment-import="toggleSegmentImport" @toggle-db-manager="showDbManager = true" />
-
-    <BusinessDbOnboardingDialog :open="dbRegistry.onboardingOpen" @update:open="dbRegistry.onboardingOpen = $event" />
-    <DbManagerDrawer :open="showDbManager" @update:open="showDbManager = $event" />
+    <StatusBar :dim-count="dimCount" :module-count="moduleCount" @toggle-library="toggleLibrary" @toggle-segment-import="toggleSegmentImport" />
 
     <LibraryDialog
       v-if="showLibraryDialog"
