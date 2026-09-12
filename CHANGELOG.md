@@ -1,5 +1,13 @@
 # Changelog
 
+## v3.1-web — 2026-09-12 · Tauri 移除 + 纯 Web 整理
+
+- **移除**：`src-tauri/`（Rust 后端、`tauri.conf.json`、icons/resources、编译产物 `target/`）、`src/lib/db.tauri.ts.bak`、`public/tauri.svg`、`docs/Tauri-develop/`、`docs/pitfalls/`（Tauri invoke 踩坑）、`scripts/import_sample_prompts.py`（直连 Tauri 调试库的旧脚本）、本地 `data/pmf.db`、`src/*.log`、`__pycache__`
+- **解耦**：11 个组件测试删除 `@tauri-apps/api/core` dead mock；`package.json` 改名 `prompt-modular-factory`；`index.html` 标题去 Tauri 后缀；`.vscode` 移除 Tauri/Rust 插件推荐；`.gitignore` 移除 Tauri/Rust/Python/本地 DB 条目；`vite.config.ts` 注释更新
+- **文案**：词库导出格式的 camelCase 兼容别名保留（新旧版本互读），注释与测试名由“Tauri 版”改为“旧版”；迁移提示改为“先在旧版本中导出词库 JSON，再在此导入”
+- **文档**：`README.md` 重写为纯 Web 口径；设计文档以 `docs/webFullStack/` 为准
+- **结构**：`src/lib/db.*` 保持按域拆分、`db.ts` 聚合导出的现状，不做目录搬迁
+
 ## v3.0.1 — 2026-08-25 · 数据库路径迁移 + 词库导出/去重导入
 
 ### 数据库路径迁移（Need01-01）

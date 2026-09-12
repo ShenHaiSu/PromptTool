@@ -1,4 +1,4 @@
-/** db 适配层共享报告 / 载荷类型（与 db.tauri.ts.bak 一致，原样保留）。 */
+/** db 适配层共享报告 / 载荷类型。 */
 import type { RuleType } from '@/engine/models'
 
 export type ImportReport = {

@@ -39,7 +39,7 @@ beforeEach(async () => {
 })
 
 describe('导出格式（08§1）', () => {
-  it('顶层含 snake_case 主键 + Tauri camelCase 兼容别名，默认不含历史/模板', async () => {
+  it('顶层含 snake_case 主键 + 旧版 camelCase 兼容别名，默认不含历史/模板', async () => {
     const json = await dbExportLibrary()
     const doc = JSON.parse(json) as Record<string, unknown>
     expect(doc['format']).toBe('pmf-library')
@@ -78,7 +78,7 @@ describe('导出格式（08§1）', () => {
 })
 
 describe('导入兼容与预览（08§2）', () => {
-  it('Tauri 版旧格式（仅 camelCase）可导入', async () => {
+  it('旧版格式（仅 camelCase）可导入', async () => {
     const json = await dbExportLibrary()
     const oldStyle = JSON.parse(json) as Record<string, unknown>
     delete oldStyle['version']

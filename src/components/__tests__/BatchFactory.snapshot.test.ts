@@ -19,7 +19,6 @@ vi.mock('@/lib/db', () => ({
   dbListFavorites: vi.fn().mockResolvedValue([]),
 }))
 
-vi.mock('@tauri-apps/api/core', () => ({ invoke: vi.fn().mockResolvedValue([]) }))
 
 beforeEach(() => {
   setActivePinia(createPinia())

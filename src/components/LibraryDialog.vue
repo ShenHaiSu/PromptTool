@@ -271,7 +271,7 @@ const hasPending = computed(() => preview.value != null && pendingText.value !==
             </label>
           </div>
           <p class="mt-2 text-xs text-muted-foreground">
-            旧数据迁移：Tauri 版 → 词库导出 JSON → Web 版在此导入。
+            旧数据迁移：先在旧版本中导出词库 JSON，再在此导入。
           </p>
 
           <!-- 导入预览（解析后、写库前二次确认） -->

@@ -33,9 +33,9 @@ function emptyLibraryReport(): LibraryImportReport {
 
 /**
  * 导出词库 JSON 文本。
- * - 顶层同时写文档 snake_case（`version`/`exported_at`/`module_tags`/`templates`）与
- *   Tauri 兼容 camelCase（`formatVersion`/`exportedAt`/`appVersion`/`schemaVersion`/`counts`），
- *   双向兼容 tauri 版与 08§1 格式。
+ * - 顶层同时写 snake_case 主键（`version`/`exported_at`/`module_tags`/`templates`）与
+ *   旧版兼容 camelCase 别名（`formatVersion`/`exportedAt`/`appVersion`/`schemaVersion`/`counts`），
+ *   新旧格式双向可读。
  * - 默认不含历史/拼装快照与模板内容（`templates: []`、`assemblies: []`），
  *   `includeHistory: true` 时作为“完整备份（含历史/模板）”一并导出。
  * - path 非空要求落盘，纯 Web 无 fs 能力 → 抛错由调用方 Blob 降级。
@@ -90,7 +90,7 @@ export async function dbExportLibrary(path?: string, opts?: LibraryExportOptions
   const now = Date.now()
   const doc = {
     format: LIBRARY_FORMAT,
-    // 08§1 snake_case 主键 + Tauri camelCase 兼容别名
+    // 08§1 snake_case 主键 + 旧版 camelCase 兼容别名
     version: LIBRARY_VERSION,
     formatVersion: LIBRARY_VERSION,
     exported_at: now,

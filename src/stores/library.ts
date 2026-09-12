@@ -40,7 +40,7 @@ export const useLibraryStore = defineStore('library', () => {
       dirty.value = false
       lastSyncedAt.value = Date.now()
     } catch {
-      // jsdom 无 Tauri 时降级：保留旧值
+      // 读取失败时降级：保留旧值
     } finally {
       loading.value = false
       syncing.value = false

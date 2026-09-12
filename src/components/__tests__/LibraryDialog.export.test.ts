@@ -62,7 +62,7 @@ describe('LibraryDialog — 阶段三纯 Web 导出/导入', () => {
     await flush(w)
     expect(w.find('[data-testid="library-import-section"]').exists()).toBe(true)
     expect(w.find('[data-testid="library-file-input"]').exists()).toBe(true)
-    expect(w.text()).toMatch('Tauri')
+    expect(w.text()).toMatch('旧数据迁移')
     w.unmount()
   })
 })

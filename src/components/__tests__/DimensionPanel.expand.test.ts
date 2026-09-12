@@ -25,7 +25,6 @@ const dbMocks = vi.hoisted(() => ({
 }))
 
 vi.mock('@/lib/db', () => dbMocks)
-vi.mock('@tauri-apps/api/core', () => ({ invoke: vi.fn().mockResolvedValue([]) }))
 
 import DimensionPanel from '../DimensionPanel.vue'
 

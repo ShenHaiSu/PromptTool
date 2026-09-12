@@ -10,18 +10,12 @@ vi.mock('@/lib/export', () => ({
   exportBatchCsv: vi.fn(),
 }))
 
-const mockInvoke = vi.fn()
-vi.mock('@tauri-apps/api/core', () => ({
-  invoke: (...args: unknown[]) => mockInvoke(...args),
-}))
-
 import PromptPreviewDialog from '../PromptPreviewDialog.vue'
 import BatchCard from '../BatchCard.vue'
 import { PromptIR } from '@/engine/models'
 
 beforeEach(() => {
   setActivePinia(createPinia())
-  mockInvoke.mockReset()
   Object.defineProperty(navigator, 'clipboard', { value: { writeText: vi.fn().mockResolvedValue(undefined) }, configurable: true })
 })
 
