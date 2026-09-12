@@ -2,8 +2,8 @@ import { defineConfig } from "vite"
 import vue from "@vitejs/plugin-vue"
 import path from "node:path"
 
-// 纯 Web 基座（web-pure 阶段一）：无 Tauri、无 HMR 特殊端口，仅静态 SPA
-// 阶段六：base './' 相对路径，任意静态托管子路径 / file:// 均可直接打开
+// 纯 Web 静态 SPA 基座：无后端、无 HMR 特殊端口
+// base './' 相对路径，任意静态托管子路径 / file:// 均可直接打开
 // https://vite.dev/config/
 export default defineConfig(async () => ({
   base: "./",
