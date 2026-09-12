@@ -81,3 +81,51 @@ export function buildCsvText(rows: ExportRow[]): string {
   })
   return '\uFEFF' + lines.join('\n') + '\n'
 }
+
+/* ------------------------------------------------------------------
+ * 阶段五：词库 CSV 导出（StatusBar「📚 词库」→ 导出 CSV，Blob 直接下载）
+ * 列：序号 / 维度Key / 维度名 / 词条EN / 显示名 / 权重 / 启用
+ * ------------------------------------------------------------------ */
+
+export type LibraryCsvRow = {
+  dimensionKey: string
+  dimensionName: string
+  contentEn: string
+  displayName: string
+  weight: number
+  isEnabled: boolean
+}
+
+/** 生成词库 CSV 文本（不下载，含 BOM），供测试校验与导出共用。 */
+export function buildLibraryCsvText(rows: LibraryCsvRow[]): string {
+  const header = ['序号', '维度Key', '维度名', '词条EN', '显示名', '权重', '启用']
+  const lines: string[] = [header.map(escCell).join(',')]
+  rows.forEach((r, idx) => {
+    lines.push(
+      [
+        String(idx + 1),
+        escCell(r.dimensionKey),
+        escCell(r.dimensionName),
+        escCell(r.contentEn),
+        escCell(r.displayName),
+        escCell(String(r.weight)),
+        escCell(r.isEnabled ? '是' : '否'),
+      ].join(','),
+    )
+  })
+  return '\uFEFF' + lines.join('\n') + '\n'
+}
+
+/** 词库行导出为 CSV 并自动下载（前端 BOM + Blob）。 */
+export function exportLibraryCsv(rows: LibraryCsvRow[]): void {
+  const csv = buildLibraryCsvText(rows)
+  const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' })
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = 'pmf-library-' + Date.now() + '.csv'
+  document.body.appendChild(a)
+  a.click()
+  document.body.removeChild(a)
+  URL.revokeObjectURL(url)
+}

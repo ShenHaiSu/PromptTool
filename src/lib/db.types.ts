@@ -30,6 +30,14 @@ export type LibraryImportReport = {
   tagsCreated: number
   tagsSkipped: number
   errors: string[]
+  /** 阶段五新增：模板 / 历史快照 / 词条-标签关联计数（生产者恒返回全量）。 */
+  templatesCreated: number
+  templatesUpdated: number
+  templatesSkipped: number
+  assembliesCreated: number
+  assembliesSkipped: number
+  moduleTagsCreated: number
+  moduleTagsSkipped: number
 }
 
 export type SegmentImportItem = {

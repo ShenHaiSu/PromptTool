@@ -4,6 +4,11 @@ import { mount } from '@vue/test-utils'
 const dbMocks = vi.hoisted(() => ({
   dbExportLibrary: vi.fn().mockResolvedValue('{"format":"pmf-library"}'),
   dbImportLibraryText: vi.fn().mockResolvedValue({ dimensionsCreated: 0, dimensionsUpdated: 0, dimensionsSkipped: 0, modulesCreated: 0, modulesUpdated: 0, modulesSkipped: 0, rulesCreated: 0, rulesUpdated: 0, rulesSkipped: 0, tagsCreated: 0, tagsSkipped: 0, errors: [] }),
+  dbPreviewLibraryText: vi.fn(),
+  dbClearLocalData: vi.fn().mockResolvedValue(undefined),
+  dbGetDimensions: vi.fn().mockResolvedValue([]),
+  dbGetAllModulesGrouped: vi.fn().mockResolvedValue({}),
+  LIBRARY_LARGE_EXPORT_BYTES: 50 * 1024 * 1024,
 }))
 
 vi.mock('@/lib/db', () => dbMocks)

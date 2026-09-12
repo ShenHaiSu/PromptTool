@@ -52,6 +52,11 @@ const library = useLibraryStore()
       >
         📚 词库
       </Button>
+      <span
+        data-testid="privacy-note"
+        class="hidden max-w-xl truncate xl:inline"
+        title="纯本地版：数据仅保存在本浏览器 IndexedDB，不上传、不鉴权；换浏览器/清数据会丢失，请定期导出备份。"
+      >纯本地版：数据仅保存在本浏览器 IndexedDB，不上传、不鉴权；换浏览器/清数据会丢失，请定期导出备份。</span>
       <span class="hidden sm:inline">就绪 · Web 版</span>
       <Button
         data-testid="theme-toggle"
