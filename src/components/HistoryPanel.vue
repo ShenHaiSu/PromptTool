@@ -13,6 +13,7 @@ import { Badge } from '@/components/ui/badge'
 import { useAssemblyStore } from '@/stores/assembly'
 import { useHistoryStore } from '@/stores/history'
 import { useToast } from '@/composables/useToast'
+import { copyText, manualCopyHint } from '@/lib/clipboard'
 import { ellipsis } from '@/lib/utils'
 import SaveDialog from '@/components/SaveDialog.vue'
 
@@ -182,9 +183,11 @@ async function applyTemplateById(id: string): Promise<void> {
   } catch (e) { push(`应用模板失败: ${String(e)}`, 'error') }
 }
 
-function copyPrompt(text: string): void {
+async function copyPrompt(text: string): Promise<void> {
   if (!text) { push('空 Prompt 无法复制', 'warning'); return }
-  navigator.clipboard?.writeText(text).then(() => push('已复制', 'success', 1200)).catch(() => push('复制失败', 'error'))
+  const res = await copyText(text)
+  if (res.ok) push('已复制', 'success', 1200)
+  else push(manualCopyHint(), 'warning', 3000)
 }
 </script>
 

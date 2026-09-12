@@ -17,6 +17,7 @@ import ModuleBatchDialog from '@/components/ModuleBatchDialog.vue'
 import PromptPreviewDialog from '@/components/PromptPreviewDialog.vue'
 import SaveDialog from '@/components/SaveDialog.vue'
 import { useToast } from '@/composables/useToast'
+import { copyText, manualCopyHint } from '@/lib/clipboard'
 import { emit, LIBRARY_CHANGED } from '@/lib/libraryEvents'
 import { dimColor } from '@/lib/utils'
 import type { Dimension, Module } from '@/engine/models'
@@ -593,13 +594,13 @@ function onGenerateFromMenu(): void {
   closeContextMenu()
 }
 async function onCopyDimKey(key: string): Promise<void> {
-  try { await navigator.clipboard.writeText(key); push(`已复制维度键名 ${key}`, 'success', 1500) }
-  catch { push('复制失败', 'warning') }
+  const res = await copyText(key)
+  push(res.ok ? `已复制维度键名 ${key}` : manualCopyHint(), res.ok ? 'success' : 'warning', res.ok ? 1500 : 3000)
   closeContextMenu()
 }
 async function onCopyDimName(nameCn: string): Promise<void> {
-  try { await navigator.clipboard.writeText(nameCn); push(`已复制维度中文名 ${nameCn}`, 'success', 1500) }
-  catch { push('复制失败', 'warning') }
+  const res = await copyText(nameCn)
+  push(res.ok ? `已复制维度中文名 ${nameCn}` : manualCopyHint(), res.ok ? 'success' : 'warning', res.ok ? 1500 : 3000)
   closeContextMenu()
 }
 function onDocClickForMenu(e: MouseEvent): void {
