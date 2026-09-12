@@ -1,7 +1,6 @@
 /**
  * usePersist — sash / 主题 / 窗口几何持久化
- * localStorage 双写兼容 pmf:sash/pmf-sash 与 pmf:theme/pmf-theme
- * 几何通过可选 Rust Command save_window_state / window 事件最佳尽力持久化
+ * 纯 Web：仅 localStorage（pmf:sash/pmf-sash、pmf:theme/pmf-theme、pmf:geometry）
  */
 import { watch, type Ref } from 'vue'
 
@@ -98,7 +97,7 @@ export function loadGeometry(): Geometry | null {
 }
 
 export function persistGeometry(): void {
-  // 仅在 Tauri 环境可用时通过 Rust 侧保存；前端仅 localStorage 兜底
+  // 纯 Web：仅 localStorage（不再调用 Rust save_window_state）
   function save(): void {
     try {
       const g: Geometry = { width: window.innerWidth, height: window.innerHeight }
@@ -106,11 +105,6 @@ export function persistGeometry(): void {
       const payload = JSON.stringify(g)
       safeSet(GEOMETRY_KEY, payload)
       safeSet(GEOMETRY_LEGACY, payload)
-      // 可选 Rust 侧：invoke('save_window_state', { width, height }) — best effort
-      // 动态导入避免 cycle；失败静默
-      void import('@tauri-apps/api/core')
-        .then(({ invoke }) => invoke('save_window_state', { width: g.width, height: g.height }).catch(() => {}))
-        .catch(() => {})
     } catch {
       /* ignore */
     }

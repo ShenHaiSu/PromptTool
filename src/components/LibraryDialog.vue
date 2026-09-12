@@ -45,15 +45,8 @@ async function onPickDir(): Promise<void> {
   if (pickingDir.value || exporting.value) return
   pickingDir.value = true
   try {
-    const mod: any = await import('@tauri-apps/plugin-dialog')
-    const fn = mod.open as (opts: any) => Promise<string | string[] | null>
-    const picked = await fn({ directory: true, multiple: false, title: '选择导出文件夹' })
-    const dir = Array.isArray(picked) ? (picked[0] ?? null) : picked
-    if (typeof dir === 'string' && dir.trim()) {
-      exportDir.value = dir.trim()
-      try { localStorage.setItem(LS_KEY, exportDir.value) } catch { /* ignore */ }
-    }
-    // null / cancel => keep原值，无提示
+    // 纯 Web 阶段一：目录选择下线（阶段三浏览器化），直接用浏览器下载导出
+    push('纯 Web 版直接浏览器下载导出，无需选择文件夹', 'warning', 2500)
   } catch (err) {
     push(`选择文件夹失败: ${String(err)}`, 'error')
   } finally {
@@ -119,16 +112,9 @@ async function onOpenDir(): Promise<void> {
   if (!p) return
   try {
     await dbRevealInExplorer(p)
-  } catch {
-    // fallback: try opener plugin directly
-    try {
-      const mod: any = await import('@tauri-apps/plugin-opener')
-      const fn = mod.openPath ?? mod.open
-      if (typeof fn === 'function') await fn(p)
-      else throw new Error('opener unavailable')
-    } catch (err) {
-      push(`无法打开所在文件夹: ${String(err)}`, 'error')
-    }
+  } catch (err) {
+    // 纯 Web：无系统文件管理器打开能力
+    push(`纯 Web 版不支持打开系统文件夹: ${String(err)}`, 'warning', 2500)
   }
 }
 
