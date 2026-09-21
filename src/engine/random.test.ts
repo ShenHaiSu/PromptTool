@@ -113,6 +113,24 @@ describe('randomAssembly', () => {
     const results = randomAssembly(dimensions, modulesByDim, new Set(), 5, defaultConfig())
     for (const ir of results) expect(ir.segments.some((s) => s.dimensionKey === 'top')).toBe(false)
   })
+
+  it('need04 randomAssembly 尊重 sortOrder：新维度在前', () => {
+    const mkDim = (key: string, sortOrder: number): Dimension => ({
+      id: 'd_' + key, key, nameCn: key, nameEn: key, sortOrder,
+      isMultiSelect: false, isEnabled: true,
+    })
+    // 输入故意逆序，输出必须按 sortOrder 重排
+    const dimensions = [mkDim('bottom', 7), mkDim('top', 6), mkDim('my_style', 0)]
+    const modulesByDim: Record<string, Module[]> = {
+      my_style: [mod('m_new', 'my_style', 'neon style')],
+      top: [mod('m_top', 'top', 'white shirt')],
+      bottom: [mod('m_bot', 'bottom', 'pleated skirt')],
+    }
+    const results = randomAssembly(dimensions, modulesByDim, new Set(), 1, defaultConfig())
+    expect(results.length).toBeGreaterThan(0)
+    expect(results[0]!.segments[0]!.dimensionKey).toBe('my_style')
+    expect(results[0]!.segments.map((s) => s.dimensionKey)).toEqual(['my_style', 'top', 'bottom'])
+  })
 })
 
 describe('partialRandomAssembly', () => {

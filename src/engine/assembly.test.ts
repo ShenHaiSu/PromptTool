@@ -108,4 +108,26 @@ describe('sortByOrder', () => {
     const ordered = sortByOrder(items, 'dimensionOrder')
     expect(ordered.map((it) => it.module.dimensionKey)).toEqual(['gender', 'top', 'bottom', 'outfit', 'shoes', 'background', 'camera'])
   })
+
+  it('need04 dimOrderMap 插队：新建维度 sortOrder=0 排到 gender 前', () => {
+    const items: SelectedItem[] = [
+      { module: mod({ id: 'm_top', dimensionKey: 'top', contentEn: 'top' }), locked: false },
+      { module: mod({ id: 'm_new', dimensionKey: 'my_style', contentEn: 'new' }), locked: false },
+    ]
+    const ordered = sortByOrder(items, 'dimensionOrder', { top: 6, my_style: 0 })
+    expect(ordered[0]!.module.dimensionKey).toBe('my_style')
+    expect(ordered[1]!.module.dimensionKey).toBe('top')
+  })
+
+  it('need04 缺键沉底不崩', () => {
+    const items: SelectedItem[] = [
+      { module: mod({ id: 'm_top', dimensionKey: 'top', contentEn: 'top' }), locked: false },
+      { module: mod({ id: 'm_new', dimensionKey: 'my_style', contentEn: 'new' }), locked: false },
+    ]
+    expect(() => sortByOrder(items, 'dimensionOrder', {})).not.toThrow()
+    // map 为空回退 DIM_ORDER：未知键沉底
+    const ordered = sortByOrder(items, 'dimensionOrder', {})
+    expect(ordered[0]!.module.dimensionKey).toBe('top')
+    expect(ordered[1]!.module.dimensionKey).toBe('my_style')
+  })
 })
