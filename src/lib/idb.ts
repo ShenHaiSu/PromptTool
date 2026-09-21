@@ -125,6 +125,11 @@ export function delByKey(s: IDBObjectStore, key: IDBValidKey): Promise<void> {
   return req(s.delete(key) as unknown as IDBRequest<void>).then(() => undefined)
 }
 
+/** 清空整个 store（阶段五“清空本地数据”用）。 */
+export function clearStore(s: IDBObjectStore): Promise<void> {
+  return req(s.clear() as unknown as IDBRequest<void>).then(() => undefined)
+}
+
 export function countAll(s: IDBObjectStore): Promise<number> {
   return req<number>(s.count() as IDBRequest<number>)
 }

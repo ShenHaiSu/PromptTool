@@ -18,7 +18,6 @@ vi.mock('@/lib/db', () => ({
 }))
 
 // mock history store fetchAll avoid invoke
-vi.mock('@tauri-apps/api/core', () => ({ invoke: vi.fn().mockResolvedValue([]) }))
 
 beforeEach(() => {
   setActivePinia(createPinia())

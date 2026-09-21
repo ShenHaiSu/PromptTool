@@ -1,4 +1,4 @@
-/** db 适配层共享报告 / 载荷类型（与 db.tauri.ts.bak 一致，原样保留）。 */
+/** db 适配层共享报告 / 载荷类型。 */
 import type { RuleType } from '@/engine/models'
 
 export type ImportReport = {
@@ -30,6 +30,14 @@ export type LibraryImportReport = {
   tagsCreated: number
   tagsSkipped: number
   errors: string[]
+  /** 阶段五新增：模板 / 历史快照 / 词条-标签关联计数（生产者恒返回全量）。 */
+  templatesCreated: number
+  templatesUpdated: number
+  templatesSkipped: number
+  assembliesCreated: number
+  assembliesSkipped: number
+  moduleTagsCreated: number
+  moduleTagsSkipped: number
 }
 
 export type SegmentImportItem = {

@@ -6,6 +6,7 @@ import { useBatchStore } from '@/stores/batch'
 import { useAssemblyStore } from '@/stores/assembly'
 import { useLibraryStore } from '@/stores/library'
 import { useToast } from '@/composables/useToast'
+import { copyText, manualCopyHint } from '@/lib/clipboard'
 import { exportBatchCsv } from '@/lib/export'
 import { useVirtualizer } from '@tanstack/vue-virtual'
 import { on, off, LIBRARY_CHANGED } from '@/lib/libraryEvents'
@@ -96,11 +97,11 @@ async function onCopyAll(): Promise<void> {
     return
   }
   const text = batch.results.map((r) => r.finalPrompt).join('\n')
-  try {
-    await navigator.clipboard.writeText(text)
+  const res = await copyText(text)
+  if (res.ok) {
     push(`已复制 ${batch.results.length} 条`, 'success', 1500)
-  } catch {
-    push('复制失败', 'error')
+  } else {
+    push(manualCopyHint(), 'warning', 3000)
   }
 }
 

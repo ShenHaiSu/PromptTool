@@ -1,6 +1,6 @@
 /**
  * IndexedDB 存储适配层入口（web-pure 阶段二）。
- * 与 `db.tauri.ts.bak` 同名导出，stores/components 只需 import `@/lib/db` 即可。
+ * stores / components 只需 import `@/lib/db` 即可，无需关心内部拆分。
  * 具体实现按域拆分在同目录小模块中，本文件仅做聚合重导出：
  * - db.types.ts       报告 / 载荷类型
  * - db.rows.ts        内部行类型与共享工具

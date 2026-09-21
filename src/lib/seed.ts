@@ -1,6 +1,6 @@
 /**
- * IndexedDB 建表与种子数据（阶段二）。
- * 口径对标 src-tauri/resources/schema.sql + commands/migration.rs：
+ * IndexedDB 建表与种子数据。
+ * 口径见 docs/webFullStack/03（数据模型与 IndexedDB 设计）：
  * - DB 名 pmf-web，版本 1；10 个 object store（03§1）
  * - 种子：14 维 / samplePrompt 全量词条 / 3 条规则（见 seed-data.ts，由 scripts/gen-seed.mjs 生成）
  * - 幂等：kv['seed_version']=1；dimensions 非空时不重写用户数据

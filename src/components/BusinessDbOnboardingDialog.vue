@@ -145,7 +145,7 @@ async function handleBrowse(): Promise<void> {
             <Button variant="outline" size="sm" data-testid="onboarding-browse" @click="handleBrowse">浏览…</Button>
           </div>
           <p v-if="pathError" data-testid="onboarding-path-error" class="text-xs text-red-500">{{ pathError }}</p>
-          <p v-else class="text-xs text-muted-foreground">可为绝对或相对路径（相对 exe/data/）</p>
+          <p v-else class="text-xs text-muted-foreground">纯 Web 版无需选择路径，数据保存在本浏览器 IndexedDB（pmf-web）</p>
         </div>
         <div class="space-y-1">
           <label class="text-sm font-medium">别名 <span class="text-red-500">*</span></label>

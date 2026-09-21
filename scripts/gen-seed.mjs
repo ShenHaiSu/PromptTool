@@ -1,9 +1,9 @@
-// 从 docs/samplePrompt 生成 src/lib/seed-data.ts（阶段二种子数据）。
-// 口径对标 src-tauri/src/commands/migration.rs：
+// 从 docs/samplePrompt 生成 src/lib/seed-data.ts（种子数据）。
+// 口径（14 维定义 + TARGET_ORDER、词条 id 规则、NSFW/禁用词表）见 docs/webFullStack/03：
 // - 14 维定义（ensure_dimensions）+ TARGET_ORDER
 // - 词条 id = mod_{key}_{num:02}（num 取自文件名 stem 最后一个 _ 后数字）
-// - 空文件跳过；displayName 回落取 content 全文；weight 1.0（Rust import_sample_prompts）
-// - NSFW_MODULE_IDS / DISABLED_GENDER_IDS 同 migration.rs
+// - 空文件跳过；displayName 回落取 content 全文；weight 1.0
+// - NSFW / 禁用词表见 seed-data.ts 头部注释
 // 用法：node scripts/gen-seed.mjs
 import { readdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join, dirname } from 'node:path'
