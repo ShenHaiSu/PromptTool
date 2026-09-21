@@ -2,6 +2,7 @@
 import { ref, onMounted, onBeforeUnmount, computed, watch } from 'vue'
 import DimensionPanel from '@/components/DimensionPanel.vue'
 import BatchFactory from '@/components/BatchFactory.vue'
+import ImageQueuePanel from '@/components/ImageQueuePanel.vue'
 import HistoryPanel from '@/components/HistoryPanel.vue'
 import StatusBar from '@/components/StatusBar.vue'
 import LibraryDialog from '@/components/LibraryDialog.vue'
@@ -75,6 +76,8 @@ const showLibraryDialog = ref(false)
 const showSegmentImport = ref(false)
 const dimensionPanelRef = ref<{ refresh: () => Promise<void> } | null>(null)
 const batchFactoryRef = ref<{ refresh: () => Promise<void> } | null>(null)
+// F3 §4：中间栏 Tab 状态（本地 ref，不持久化，默认停留在 prompt）
+const centerTab = ref<'prompt' | 'image'>('prompt')
 
 function syncCountsFromLibrary(): void {
   if (library.dimensions.length) dimCount.value = library.dimensions.length
@@ -235,7 +238,32 @@ onBeforeUnmount(() => {
         class="flex min-h-0 shrink-0 flex-col overflow-hidden bg-background"
         :style="{ width: centerPct }"
       >
-        <BatchFactory ref="batchFactoryRef" />
+        <!-- F3 §4：中间栏 Tabs（prompt-batch | image-queue），头高约 32px，内容 flex-1 min-h-0 自适应 -->
+        <div class="flex h-8 shrink-0 items-center gap-1 border-b px-2">
+          <button
+            data-testid="center-tab-prompt"
+            class="h-6 rounded px-2 text-xs"
+            :class="centerTab === 'prompt' ? 'bg-accent font-semibold' : 'text-muted-foreground'"
+            @click="centerTab = 'prompt'"
+          >
+            Prompt 批量
+          </button>
+          <button
+            data-testid="center-tab-image"
+            class="h-6 rounded px-2 text-xs"
+            :class="centerTab === 'image' ? 'bg-accent font-semibold' : 'text-muted-foreground'"
+            @click="centerTab = 'image'"
+          >
+            生图队列
+          </button>
+        </div>
+        <div v-show="centerTab === 'prompt'" class="flex min-h-0 flex-1 flex-col overflow-hidden">
+          <BatchFactory ref="batchFactoryRef" @switch-to-image="centerTab = 'image'" />
+        </div>
+        <!-- 生图面板按需挂载：默认停留在 prompt，不预 mount，首屏更快；切 Tab 时 initQueue 回填 -->
+        <div v-if="centerTab === 'image'" class="flex min-h-0 flex-1 flex-col overflow-hidden">
+          <ImageQueuePanel @switch-to-prompt="centerTab = 'prompt'" />
+        </div>
       </section>
 
       <div

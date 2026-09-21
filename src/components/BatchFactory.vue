@@ -5,14 +5,18 @@ import BatchCard from '@/components/BatchCard.vue'
 import { useBatchStore } from '@/stores/batch'
 import { useAssemblyStore } from '@/stores/assembly'
 import { useLibraryStore } from '@/stores/library'
+import { useImageQueueStore } from '@/stores/imageQueue'
 import { useToast } from '@/composables/useToast'
 import { exportBatchCsv } from '@/lib/export'
 import { useVirtualizer } from '@tanstack/vue-virtual'
 import { on, off, LIBRARY_CHANGED } from '@/lib/libraryEvents'
 
+const emit = defineEmits<{ (e: 'switch-to-image'): void }>()
+
 const batch = useBatchStore()
 const assembly = useAssemblyStore()
 const library = useLibraryStore()
+const iq = useImageQueueStore()
 const { push } = useToast()
 
 // 控制行状态
@@ -82,6 +86,8 @@ async function onRandom(): Promise<void> {
     batch.generate(dims, grouped, lockedIds, count.value, cfg, allowNsfw.value)
     push(`已生成 ${batch.results.length} 条`, 'success', 1600)
   }
+  // 记录本次随机模式，供生图队列开始前备料 / 饥饿补货沿用
+  iq.lastRandomMode = { usePartial: usePartial.value, allowNsfw: allowNsfw.value }
   await nextTick()
 }
 
@@ -194,6 +200,15 @@ defineExpose({ refresh: refreshDims })
         </div>
       </div>
       <div v-if="library.dirty && library.total > 200" class="text-[11px] text-muted-foreground">词库已变更，10 秒内自动同步 · 随机按钮不受影响</div>
+      <!-- 开关本体只在生图配置面板维护，此处只读跳转 chip -->
+      <button
+        data-testid="batch-loop-chip"
+        class="self-start text-[11px] text-primary"
+        title="生图循环开关在生图队列配置中维护，点击前往"
+        @click="emit('switch-to-image')"
+      >
+        生图循环：{{ iq.config.loopEnabled ? '开' : '关' }}（前往生图队列）
+      </button>
     </div>
 
     <!-- 虚拟化 Card 流 -->
