@@ -44,6 +44,25 @@ describe('weightedSample', () => {
 })
 
 describe('randomAssembly', () => {
+  it('need04: respects db sortOrder over input order', () => {
+    // 故意逆序输入 [bottom:7, top:6, my_style:0]，输出必须按 DB sortOrder 排
+    const dimensions: Dimension[] = [
+      { id: 'd0', key: 'bottom', nameCn: 'b', nameEn: 'b', sortOrder: 7, isMultiSelect: false, isEnabled: true },
+      { id: 'd1', key: 'top', nameCn: 't', nameEn: 't', sortOrder: 6, isMultiSelect: false, isEnabled: true },
+      { id: 'd2', key: 'my_style', nameCn: 's', nameEn: 's', sortOrder: 0, isMultiSelect: false, isEnabled: true },
+    ]
+    const modulesByDim: Record<string, Module[]> = {
+      bottom: [mod('m_bot', 'bottom', 'pleated skirt')],
+      top: [mod('m_top', 'top', 'white shirt')],
+      my_style: [mod('m_sty', 'my_style', 'cyberpunk')],
+    }
+    const results = randomAssembly(dimensions, modulesByDim, new Set(), 3, defaultConfig())
+    expect(results.length).toBeGreaterThan(0)
+    for (const ir of results) {
+      expect(ir.segments.map((s) => s.dimensionKey)).toEqual(['my_style', 'top', 'bottom'])
+    }
+  })
+
   it('returns requested count (up to)', () => {
     const dimensions = dims([{ key: 'top' }, { key: 'bottom' }])
     const modulesByDim: Record<string, Module[]> = {

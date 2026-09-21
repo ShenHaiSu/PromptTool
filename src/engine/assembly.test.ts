@@ -108,4 +108,22 @@ describe('sortByOrder', () => {
     const ordered = sortByOrder(items, 'dimensionOrder')
     expect(ordered.map((it) => it.module.dimensionKey)).toEqual(['gender', 'top', 'bottom', 'outfit', 'shoes', 'background', 'camera'])
   })
+
+  it('need04: db map lets new dimension cut ahead of legacy order', () => {
+    const items: SelectedItem[] = [
+      { module: mod({ id: 'm_top', dimensionKey: 'top', contentEn: 'top' }), locked: false },
+      { module: mod({ id: 'm_style', dimensionKey: 'my_style', contentEn: 'style' }), locked: false },
+    ]
+    const ordered = sortByOrder(items, 'dimensionOrder', { my_style: 0, top: 6 })
+    expect(ordered.map((it) => it.module.dimensionKey)).toEqual(['my_style', 'top'])
+  })
+
+  it('need04: empty map falls back without throwing, unknown keys sink', () => {
+    const items: SelectedItem[] = [
+      { module: mod({ id: 'm_x', dimensionKey: 'zz_unknown', contentEn: 'x' }), locked: false },
+      { module: mod({ id: 'm_top', dimensionKey: 'top', contentEn: 'top' }), locked: false },
+    ]
+    const ordered = sortByOrder(items, 'dimensionOrder', {})
+    expect(ordered.map((it) => it.module.dimensionKey)).toEqual(['top', 'zz_unknown'])
+  })
 })

@@ -387,6 +387,19 @@ pub fn db_soft_delete_module(app: AppHandle, id: String) -> Result<(), String> {
 // ------------------------------------------------------------------
 // Dimensions — CRUD (Need02 §02)
 // ------------------------------------------------------------------
+
+/// need04 B：下一个可用的 sort_order = 存活维度最大值 + 1（空表时为 1）。
+/// 只看 is_deleted=0 的存活行；显式传值（含 0/负数插队）不走这里。
+fn next_sort_order(conn: &Connection) -> Result<i64, String> {
+    let max: Option<i64> = conn
+        .query_row(
+            "SELECT MAX(sort_order) FROM dimensions WHERE is_deleted=0",
+            [],
+            |r| r.get(0),
+        )
+        .map_err(|e| e.to_string())?;
+    Ok(max.unwrap_or(0) + 1)
+}
 #[tauri::command]
 pub fn db_create_dimension(
     app: AppHandle,
@@ -417,7 +430,11 @@ pub fn db_create_dimension(
     }
     let id = new_id();
     let ts = now_ts();
-    let so = sort_order.unwrap_or(0);
+    // need04 B：未显式传值时按 MAX(sort_order)+1 自增，空库时为 1；显式 0/负数保留插队语义
+    let so = match sort_order {
+        Some(v) => v,
+        None => next_sort_order(&conn)?,
+    };
     let ms = if is_multi_select.unwrap_or(false) { 1 } else { 0 };
     let nen = name_en.and_then(|s| {
         let t = s.trim().to_string();
@@ -1182,10 +1199,47 @@ pub struct LibraryExportPayload {
     pub app_version: String,
     pub schema_version: i64,
     pub counts: LibraryCounts,
-    pub dimensions: Vec<DimensionDto>,
+    pub dimensions: Vec<ImportDimensionDto>,
     pub modules: Vec<ModuleDto>,
     pub rules: Vec<RuleDto>,
     pub tags: Vec<TagDto>,
+}
+
+/// need04 B：导入用维度 DTO。`sortOrder` 缺失/null 时为 None，调用方按
+/// `next_sort` 递增分配；显式值（含 0/负数）原样保留且不消耗计数器。
+/// 与 `DimensionDto`（sort_order: i64 必填，读库/导出用）区分，避免旧文件
+/// 缺字段导致整个 JSON 解析失败。
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct ImportDimensionDto {
+    pub id: String,
+    pub key: String,
+    pub name_cn: String,
+    pub name_en: Option<String>,
+    #[serde(default)]
+    pub sort_order: Option<i64>,
+    pub is_multi_select: bool,
+    pub is_enabled: bool,
+    pub icon: Option<String>,
+    pub created_at: Option<i64>,
+    pub updated_at: Option<i64>,
+}
+
+impl From<DimensionDto> for ImportDimensionDto {
+    fn from(d: DimensionDto) -> Self {
+        Self {
+            id: d.id,
+            key: d.key,
+            name_cn: d.name_cn,
+            name_en: d.name_en,
+            sort_order: Some(d.sort_order),
+            is_multi_select: d.is_multi_select,
+            is_enabled: d.is_enabled,
+            icon: d.icon,
+            created_at: d.created_at,
+            updated_at: d.updated_at,
+        }
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -1259,7 +1313,7 @@ pub(crate) fn export_library(conn: &Connection) -> Result<LibraryExportPayload, 
             .map_err(|e| e.to_string())?;
         let mut out = Vec::new();
         for r in rows {
-            out.push(r.map_err(|e| e.to_string())?);
+            out.push(ImportDimensionDto::from(r.map_err(|e| e.to_string())?));
         }
         out
     };
@@ -1543,6 +1597,17 @@ pub(crate) fn import_library_into(
         .map_err(|e| format!("开始事务失败: {}", e))?;
     let tx_result: Result<(), String> = (|| {
         // ===== 阶段 1：维度（去重键 key） =====
+        // need04 B：进入循环前先算 next_sort = MAX(sort_order)+1；无值新维度递增分配，显式值不消耗计数器
+        let mut next_sort: i64 = {
+            let max: Option<i64> = conn
+                .query_row(
+                    "SELECT MAX(sort_order) FROM dimensions WHERE is_deleted=0",
+                    [],
+                    |r| r.get(0),
+                )
+                .map_err(|e| e.to_string())?;
+            max.unwrap_or(0) + 1
+        };
         for fdim in &payload.dimensions {
             // 冲突：库中 id 相同但 key 不同 → 视为新维度，重新生成 uuid 插入
             let dup_key: Option<String> = conn
@@ -1555,6 +1620,14 @@ pub(crate) fn import_library_into(
                 .filter(|k| k != &fdim.key);
             if let Some(dup_key) = dup_key {
                 let new_id = new_id();
+                let so = match fdim.sort_order {
+                    Some(v) => v,
+                    None => {
+                        let v = next_sort;
+                        next_sort += 1;
+                        v
+                    }
+                };
                 conn.execute(
                     "INSERT INTO dimensions (id, key, name_cn, name_en, sort_order, is_multi_select, is_enabled, icon, created_at, updated_at, is_deleted) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,0)",
                     params![
@@ -1562,7 +1635,7 @@ pub(crate) fn import_library_into(
                         fdim.key,
                         fdim.name_cn,
                         fdim.name_en,
-                        fdim.sort_order,
+                        so,
                         i64_of(fdim.is_multi_select),
                         i64_of(fdim.is_enabled),
                         &fdim.icon,
@@ -1589,12 +1662,21 @@ pub(crate) fn import_library_into(
             match existing {
                 Some(db_id) => {
                     if mode == ImportMode::Overwrite {
+                        // need04 B：无值覆盖导入同样递增分配（与 web-pure 对齐），显式值原样覆盖
+                        let so = match fdim.sort_order {
+                            Some(v) => v,
+                            None => {
+                                let v = next_sort;
+                                next_sort += 1;
+                                v
+                            }
+                        };
                         conn.execute(
                             "UPDATE dimensions SET name_cn=?1, name_en=?2, sort_order=?3, is_multi_select=?4, is_enabled=?5, icon=?6, updated_at=?7 WHERE id=?8",
                             params![
                                 fdim.name_cn,
                                 fdim.name_en,
-                                fdim.sort_order,
+                                so,
                                 i64_of(fdim.is_multi_select),
                                 i64_of(fdim.is_enabled),
                                 &fdim.icon,
@@ -1615,6 +1697,15 @@ pub(crate) fn import_library_into(
                     } else {
                         new_id()
                     };
+                    // need04 B：无值新增递增分配，显式值原样保留且不消耗计数器
+                    let so = match fdim.sort_order {
+                        Some(v) => v,
+                        None => {
+                            let v = next_sort;
+                            next_sort += 1;
+                            v
+                        }
+                    };
                     conn.execute(
                         "INSERT INTO dimensions (id, key, name_cn, name_en, sort_order, is_multi_select, is_enabled, icon, created_at, updated_at, is_deleted) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,0)",
                         params![
@@ -1622,7 +1713,7 @@ pub(crate) fn import_library_into(
                             fdim.key,
                             fdim.name_cn,
                             fdim.name_en,
-                            fdim.sort_order,
+                            so,
                             i64_of(fdim.is_multi_select),
                             i64_of(fdim.is_enabled),
                             &fdim.icon,
@@ -1986,12 +2077,12 @@ mod tests {
                 rules: 0,
                 tags: 0,
             },
-            dimensions: vec![DimensionDto {
+            dimensions: vec![ImportDimensionDto {
                 id: "dim_xxx".into(),
                 key: "top".into(),
                 name_cn: "上装".into(),
                 name_en: Some("Top".into()),
-                sort_order: 6,
+                sort_order: Some(6),
                 is_multi_select: false,
                 is_enabled: true,
                 icon: None,
@@ -2045,12 +2136,12 @@ mod tests {
                 rules: 0,
                 tags: 0,
             },
-            dimensions: vec![DimensionDto {
+            dimensions: vec![ImportDimensionDto {
                 id: "dim_top".into(),             // 库中 id 存在
                 key: "unknown_key".into(),         // 但 key 不同！
                 name_cn: "未知".into(),
                 name_en: None,
-                sort_order: 99,
+                sort_order: Some(99),
                 is_multi_select: false,
                 is_enabled: true,
                 icon: None,
@@ -2092,12 +2183,12 @@ mod tests {
                 rules: 0,
                 tags: 0,
             },
-            dimensions: vec![DimensionDto {
+            dimensions: vec![ImportDimensionDto {
                 id: "new_id".into(),
                 key: "top".into(),               // 库中已有
                 name_cn: "上装(已更新)".into(),
                 name_en: Some("Top Updated".into()),
-                sort_order: 6,
+                sort_order: Some(6),
                 is_multi_select: false,
                 is_enabled: true,
                 icon: None,
@@ -2167,12 +2258,12 @@ mod tests {
                 rules: 0,
                 tags: 0,
             },
-            dimensions: vec![DimensionDto {
+            dimensions: vec![ImportDimensionDto {
                 id: "dim_new".into(),
                 key: "new_dim".into(),
                 name_cn: "新维度".into(),
                 name_en: Some("New".into()),
-                sort_order: 99,
+                sort_order: Some(99),
                 is_multi_select: false,
                 is_enabled: true,
                 icon: None,
@@ -2341,6 +2432,113 @@ mod tests {
             .query_row("SELECT COUNT(*) FROM dimensions WHERE key='' AND is_deleted=0", [], |r| r.get(0))
             .unwrap();
         assert_eq!(cnt, 1);
+        drop(conn);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // need04 B：next_sort_order = 存活 max+1；空库为 1；已删除行不参与
+    #[test]
+    fn next_sort_order_ignores_deleted() {
+        let (conn, dir) = temp_db("next_sort");
+        assert_eq!(next_sort_order(&conn).unwrap(), 1);
+        seed_basic(&conn);
+        assert_eq!(next_sort_order(&conn).unwrap(), 7);
+        let ts = t();
+        conn.execute(
+            "INSERT INTO dimensions (id, key, name_cn, sort_order, is_multi_select, is_enabled, created_at, updated_at, is_deleted) VALUES ('dim_gone','gone','已删',100,0,1,?1,?1,1)",
+            params![ts],
+        )
+        .unwrap();
+        assert_eq!(next_sort_order(&conn).unwrap(), 7);
+        drop(conn);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // need04 B：导入 [无, 显式5, 无] → max+1 / 5 / max+2，显式值不消耗计数器
+    #[test]
+    fn import_assigns_incremental_sort() {
+        let (conn, dir) = temp_db("import_sort");
+        seed_basic(&conn); // 存活 max = 6（top:6, body:4）
+        let mkdim = |id: &str, key: &str, so: Option<i64>| ImportDimensionDto {
+            id: id.into(),
+            key: key.into(),
+            name_cn: key.into(),
+            name_en: None,
+            sort_order: so,
+            is_multi_select: false,
+            is_enabled: true,
+            icon: None,
+            created_at: None,
+            updated_at: None,
+        };
+        let payload = LibraryExportPayload {
+            format: "pmf-library".into(),
+            format_version: 1,
+            exported_at: t(),
+            app_version: "test".into(),
+            schema_version: 1,
+            counts: LibraryCounts {
+                dimensions: 3,
+                modules: 0,
+                rules: 0,
+                tags: 0,
+            },
+            dimensions: vec![
+                mkdim("dim_auto_a", "auto_a", None),
+                mkdim("dim_explicit", "explicit", Some(5)),
+                mkdim("dim_auto_b", "auto_b", None),
+            ],
+            modules: vec![],
+            rules: vec![],
+            tags: vec![],
+        };
+        let r = import_library_into(&conn, &payload, "overwrite").unwrap();
+        assert_eq!(r.dimensions_created, 3);
+        let so = |key: &str| -> i64 {
+            conn.query_row(
+                "SELECT sort_order FROM dimensions WHERE key=?1 AND is_deleted=0",
+                params![key],
+                |r| r.get(0),
+            )
+            .unwrap()
+        };
+        assert_eq!(so("auto_a"), 7);
+        assert_eq!(so("explicit"), 5);
+        assert_eq!(so("auto_b"), 8);
+        // DB 序：body(4) < explicit(5) < top(6) < auto_a(7) < auto_b(8)
+        let keys: Vec<String> = {
+            let mut stmt = conn
+                .prepare("SELECT key FROM dimensions WHERE is_deleted=0 ORDER BY sort_order")
+                .unwrap();
+            stmt.query_map([], |r| r.get(0))
+                .unwrap()
+                .map(|r| r.unwrap())
+                .collect()
+        };
+        let tail = &keys[keys.len() - 4..];
+        assert_eq!(tail, &["explicit", "top", "auto_a", "auto_b"]);
+        drop(conn);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // need04 B：缺 sortOrder 的旧文件可解析（宽容），而不是整个 JSON 报错
+    #[test]
+    fn import_legacy_missing_sort_order_parses() {
+        let text = r#"{"format":"pmf-library","formatVersion":1,"exportedAt":1,"appVersion":"old","schemaVersion":1,"counts":{"dimensions":1,"modules":0,"rules":0,"tags":0},"dimensions":[{"id":"d_old","key":"old_dim","nameCn":"旧维度","nameEn":null,"isMultiSelect":false,"isEnabled":true,"icon":null,"createdAt":null,"updatedAt":null}],"modules":[],"rules":[],"tags":[]}"#;
+        let payload = parse_library_payload(text).unwrap();
+        assert!(payload.dimensions[0].sort_order.is_none());
+        let (conn, dir) = temp_db("legacy_sort");
+        seed_basic(&conn);
+        let r = import_library_into(&conn, &payload, "skip").unwrap();
+        assert_eq!(r.dimensions_created, 1);
+        let so: i64 = conn
+            .query_row(
+                "SELECT sort_order FROM dimensions WHERE key='old_dim'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(so, 7);
         drop(conn);
         let _ = std::fs::remove_dir_all(&dir);
     }

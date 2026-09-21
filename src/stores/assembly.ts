@@ -1,6 +1,7 @@
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
 import { assemble } from '@/engine/assembly'
+import { useLibraryStore } from '@/stores/library'
 import { PromptIR } from '@/engine/models'
 import type { AssemblyConfig, SelectedItem } from '@/engine/models'
 import { defaultAssemblyConfig } from '@/engine/models'
@@ -13,7 +14,11 @@ export const useAssemblyStore = defineStore('assembly', () => {
   const warnings = computed(() => ir.value.warnings)
 
   function reassemble() {
-    const { ir: nextIr, finalPrompt: nextFinal } = assemble(selectedItems.value, config.value)
+    // need04 D4：跨 store 自取 library.dimOrderMap；library 为空时 map={} 自动回退 DIM_ORDER
+    const library = useLibraryStore()
+    const { ir: nextIr, finalPrompt: nextFinal } = assemble(
+      selectedItems.value, config.value, undefined, library.dimOrderMap,
+    )
     ir.value = nextIr
     finalPrompt.value = nextFinal
   }

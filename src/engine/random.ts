@@ -2,7 +2,7 @@
  * 随机引擎 — 对标 src/engine/random_engine.py
  * random.choices → weightedSample 自实现；partialRandomAssembly 禁忌/多选收敛平移
  */
-import { assemble } from './assembly'
+import { assemble, buildDimOrderMap } from './assembly'
 import { applyRules } from './rules'
 import type { AssemblyConfig, Dimension, Module, SelectedItem } from './models'
 import { PromptIR } from './models'
@@ -51,6 +51,8 @@ export function randomAssembly(
   const seen = new Set<string>()
   const maxAttempts = count * MAX_ATTEMPTS_FACTOR
   let attempts = 0
+  // need04：用全量 dimensions 现算真相源映射（含未抽中/anchor 段所在维度），建在循环外
+  const dimOrderMap = buildDimOrderMap(dimensions)
 
   while (results.length < count && attempts < maxAttempts) {
     attempts++
@@ -80,7 +82,7 @@ export function randomAssembly(
     }
 
     if (picked.length === 0) continue
-    const { ir } = assemble(picked, config)
+    const { ir } = assemble(picked, config, undefined, dimOrderMap)
     const h = ir.hash()
     if (history && isInWindow(h, scopeKey, history.recentByScope)) continue
     if (seen.has(h)) continue
@@ -136,6 +138,8 @@ export function partialRandomAssembly(
   const seen = new Set<string>()
   const maxAttempts = count * MAX_ATTEMPTS_FACTOR
   let attempts = 0
+  // need04：同 randomAssembly，全量 dimensions 建图后透传 assemble
+  const dimOrderMap = buildDimOrderMap(dimensions)
 
   while (results.length < count && attempts < maxAttempts) {
     attempts++
@@ -162,7 +166,7 @@ export function partialRandomAssembly(
     }
 
     if (picked.length === 0) continue
-    const { ir } = assemble(picked, config)
+    const { ir } = assemble(picked, config, undefined, dimOrderMap)
     const h = ir.hash()
     if (history && isInWindow(h, scopeKey, history.recentByScope)) continue
     if (seen.has(h)) continue

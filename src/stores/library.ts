@@ -26,6 +26,11 @@ export const useLibraryStore = defineStore('library', () => {
 
   const isLarge = computed(() => total.value > THRESHOLD)
 
+  // need04 D2：唯一建图点，由 dimensions 派生 sortOrder 映射，reassemble 瞬间读取
+  const dimOrderMap = computed<Record<string, number>>(() =>
+    Object.fromEntries(dimensions.value.map((d) => [d.key, d.sortOrder])),
+  )
+
   async function fetchAll(): Promise<void> {
     if (loading.value) return
     loading.value = true
@@ -94,6 +99,7 @@ export const useLibraryStore = defineStore('library', () => {
     lastSyncedAt,
     total,
     isLarge,
+    dimOrderMap,
     fetchAll,
     scheduleFetch,
     ensureFreshForRandom,

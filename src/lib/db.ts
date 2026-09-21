@@ -207,7 +207,8 @@ export async function dbCreateDimension(
     key,
     nameCn,
     nameEn: nameEn ?? null,
-    sortOrder: sortOrder ?? 0,
+    // need04 B：缺省传 null 让 Rust 按 MAX(sort_order)+1 自增；显式 0 用于插队
+    sortOrder: sortOrder ?? null,
     isMultiSelect: isMultiSelect ?? false,
   })
   return toDimension(d)

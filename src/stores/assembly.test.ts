@@ -1,5 +1,12 @@
-import { describe, it, expect, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { setActivePinia, createPinia } from 'pinia'
+
+// need04：reassemble 跨 store 读 library.dimOrderMap；单测用桩代替真实 library store，
+// 避免经 @/lib/db 拉起 @tauri-apps/api/core（本机无 Tauri 运行时）
+vi.mock('@/stores/library', () => ({
+  useLibraryStore: () => ({ dimOrderMap: {} }),
+}))
+
 import { useAssemblyStore } from './assembly'
 import type { Module } from '@/engine/models'
 

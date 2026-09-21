@@ -4,7 +4,7 @@
 import { adaptToModel } from './adapters'
 import { applyRules } from './rules'
 import { evaluateRules } from './ruleEngine'
-import type { AssemblyConfig, SelectedItem } from './models'
+import type { AssemblyConfig, Dimension, SelectedItem } from './models'
 import { PromptIR, IR_SNAPSHOT_VERSION, type IRSegment } from './models'
 import type { EngineRule } from './ruleTypes'
 
@@ -77,12 +77,16 @@ const DIM_ORDER: Record<string, number> = {
 
 export function sortByOrder(items: SelectedItem[], mode: string, dimOrderMap?: Record<string, number>): SelectedItem[] {
   if (mode === 'customDragOrder') return [...items]
-  // need02 D2：优先读 DB sort_order 映射，缺省走 legacy DIM_ORDER（老单测不破）
+  // need04：L1 dimOrderMap（DB sortOrder 唯一真相源）> L2 legacy DIM_ORDER > L3 沉底
   return [...items].sort((a, b) => {
     const ka = a.module.dimensionKey ?? ''
     const kb = b.module.dimensionKey ?? ''
-    const oa = dimOrderMap?.[ka] ?? DIM_ORDER[ka] ?? 99
-    const ob = dimOrderMap?.[kb] ?? DIM_ORDER[kb] ?? 99
+    const oa = dimOrderMap?.[ka] ?? DIM_ORDER[ka] ?? Number.MAX_SAFE_INTEGER
+    const ob = dimOrderMap?.[kb] ?? DIM_ORDER[kb] ?? Number.MAX_SAFE_INTEGER
     return oa - ob
   })
+}
+
+export function buildDimOrderMap(dims: Dimension[]): Record<string, number> {
+  return Object.fromEntries(dims.map((d) => [d.key, d.sortOrder]))
 }
