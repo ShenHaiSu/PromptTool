@@ -2,6 +2,7 @@ pub mod batch;
 pub mod business;
 pub mod db;
 pub mod export;
+pub mod image_queue;
 pub mod meta;
 pub mod migration;
 pub mod rules;

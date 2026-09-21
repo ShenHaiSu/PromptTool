@@ -63,5 +63,8 @@ data/
 *.sqlite
 *.sqlite3
 
+# Need05: 生图队列混淆密钥文件（含 XOR+base64 混淆 Key，绝不进仓库）
+*.secrets.json
+
 # ZCode session data
 .zcode/

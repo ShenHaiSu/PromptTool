@@ -40,6 +40,9 @@ pub fn run() {
                 eprintln!("[pmf] auto_migrate_first_business: {}", e);
             }
 
+            // --- Need05: 生图队列 state（image_queue.json + secrets 启动加载） ---
+            app.manage(commands::image_queue::queue::init_state(&app.handle()));
+
             // Legacy single-DB fallback init (kept for backward compat, not default)
             // If foreground is None and pmf.db exists but PromptDataBase not, init_db can seed pmf.db for dev usage
             // Not auto-running init_db to avoid creating pmf.db confusion; Default.db is source of truth.
@@ -102,7 +105,18 @@ pub fn run() {
             commands::export::db_export_library_to_dir,
             commands::export::db_reveal_in_explorer,
             commands::translation::db_batch_update_display_names,
-            commands::translation::db_batch_update_display_names_text
+            commands::translation::db_batch_update_display_names_text,
+            // --- Need05: 生图队列 10 命令 ---
+            commands::image_queue::queue::iq_set_config,
+            commands::image_queue::queue::iq_get_config,
+            commands::image_queue::queue::iq_test_connection,
+            commands::image_queue::queue::iq_enqueue,
+            commands::image_queue::queue::iq_start,
+            commands::image_queue::queue::iq_stop,
+            commands::image_queue::queue::iq_retry,
+            commands::image_queue::queue::iq_remove,
+            commands::image_queue::queue::iq_clear_finished,
+            commands::image_queue::queue::iq_list
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
