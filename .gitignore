@@ -8,6 +8,11 @@ dist
 dist-ssr
 *.local
 
+# Rust / Tauri (web-pure 已移除 src-tauri 源码，防止本地 cargo 构建残留污染)
+src-tauri/target/
+src-tauri/gen/
+target/
+
 # Logs
 logs
 *.log
