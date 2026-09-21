@@ -120,6 +120,11 @@ export async function dbImportLibraryText(
       keyById.set(d.id, d.key)
       if (d.isDeleted === 0) liveByKey.set(d.key, d)
     }
+    // 动态 sortOrder 起点：当前存活维度最大值 + 1（空库时为 1）
+    let nextSort = 1
+    for (const d of byId.values()) {
+      if (d.isDeleted === 0 && d.sortOrder >= nextSort) nextSort = d.sortOrder + 1
+    }
     // ---- 维度（去重键 key） ----
     for (const f of fDims) {
       const fkey = f.key ?? ''
@@ -151,9 +156,10 @@ export async function dbImportLibraryText(
       const idOwner = fid ? byId.get(fid) : undefined
       if (idOwner && idOwner.key !== fkey) {
         const nid = uid()
+        const sortVal = f.sortOrder ?? nextSort++
         const row: DimRow = {
           id: nid, key: fkey, nameCn: f.nameCn ?? fkey, nameEn: f.nameEn ?? null,
-          sortOrder: f.sortOrder ?? 0, isMultiSelect: b(!!f.isMultiSelect),
+          sortOrder: sortVal, isMultiSelect: b(!!f.isMultiSelect),
           isEnabled: b(f.isEnabled !== false), icon: f.icon ?? null,
           createdAt: ts, updatedAt: ts, isDeleted: 0,
         }
@@ -169,7 +175,7 @@ export async function dbImportLibraryText(
       const finalId = fid && !byId.has(fid) ? fid : uid()
       const row: DimRow = {
         id: finalId, key: fkey, nameCn: f.nameCn ?? fkey, nameEn: f.nameEn ?? null,
-        sortOrder: f.sortOrder ?? 0, isMultiSelect: b(!!f.isMultiSelect),
+        sortOrder: f.sortOrder ?? nextSort++, isMultiSelect: b(!!f.isMultiSelect),
         isEnabled: b(f.isEnabled !== false), icon: f.icon ?? null,
         createdAt: ts, updatedAt: ts, isDeleted: 0,
       }

@@ -118,6 +118,21 @@ describe('维度 / 词条', () => {
     await dbUpdateDimension({ ...body, nameCn: '身材' })
     expect((await dbGetDimensions()).find((d) => d.id === body.id)!.nameCn).toBe('身材')
   })
+
+  it('不传 sortOrder 时按现有最大值 + 1 自增', async () => {
+    const before = await dbGetDimensions()
+    const maxSo = Math.max(...before.map((d) => d.sortOrder))
+    const a = await dbCreateDimension('auto_a', 'A')
+    const b = await dbCreateDimension('auto_b', 'B')
+    const c = await dbCreateDimension('auto_c', 'C', undefined, 50) // 显式优先
+    const after = await dbGetDimensions()
+    expect(a.sortOrder).toBe(maxSo + 1)
+    expect(b.sortOrder).toBe(maxSo + 2)
+    expect(c.sortOrder).toBe(50)
+    // 排序结果：A、B、C 出现在最末
+    const tail = after.slice(-3).map((d) => d.key)
+    expect(tail).toEqual(['auto_a', 'auto_b', 'auto_c'])
+  })
 })
 
 describe('拼装', () => {
@@ -338,6 +353,32 @@ describe('词库', () => {
     await expect(dbImportLibraryText('{}', 'skip')).rejects.toThrow('不支持的库文件格式')
     const json = await dbExportLibrary()
     await expect(dbImportLibraryText(json, 'bad' as never)).rejects.toThrow('未知导入模式')
+  })
+
+  it('导入不带 sortOrder 的新维度时按 max+1 递增，而非 0', async () => {
+    const before = await dbGetDimensions()
+    const maxSo = Math.max(...before.map((d) => d.sortOrder))
+    const json = JSON.stringify({
+      format: 'pmf-library',
+      formatVersion: 1,
+      counts: { dimensions: 3, modules: 0, rules: 0, tags: 0 },
+      dimensions: [
+        { key: 'imp_no_so_1', nameCn: '无 sortOrder 1' },
+        { key: 'imp_with_so', nameCn: '带 sortOrder', sortOrder: 5 },
+        { key: 'imp_no_so_2', nameCn: '无 sortOrder 2' },
+      ],
+      modules: [], rules: [], tags: [],
+    })
+    const r = await dbImportLibraryText(json, 'overwrite')
+    expect(r.dimensionsCreated).toBe(3)
+    const after = await dbGetDimensions()
+    const byKey = new Map(after.map((d) => [d.key, d.sortOrder]))
+    expect(byKey.get('imp_no_so_1')).toBe(maxSo + 1)
+    expect(byKey.get('imp_with_so')).toBe(5)
+    expect(byKey.get('imp_no_so_2')).toBe(maxSo + 2)
+    const idx = (k: string) => after.findIndex((d) => d.key === k)
+    expect(idx('imp_with_so')).toBeLessThan(idx('imp_no_so_1'))
+    expect(idx('imp_no_so_1')).toBeLessThan(idx('imp_no_so_2'))
   })
 })
 

@@ -114,6 +114,14 @@ export async function dbSoftDeleteModule(id: string): Promise<void> {
   })
 }
 
+/** 计算下一个可用的 sortOrder：当前存活维度最大值 + 1（空库时为 1）。 */
+async function nextSortOrder(db: IDBDatabase): Promise<number> {
+  const rows = await tx(db, 'dimensions', 'readonly', (s) => getAll<DimRow>(s['dimensions']!))
+  let max = 0
+  for (const d of rows) if (d.isDeleted === 0 && d.sortOrder > max) max = d.sortOrder
+  return max + 1
+}
+
 export async function dbCreateDimension(
   key: string,
   nameCn: string,
@@ -130,10 +138,11 @@ export async function dbCreateDimension(
     getAllByIndex<DimRow>(s['dimensions']!, 'key', k),
   )
   if (dup.some((d) => d.isDeleted === 0)) throw new Error(`分类键名 '${k}' 已存在，请使用其他键名`)
+  const resolvedSort = sortOrder ?? (await nextSortOrder(db))
   const ts = Date.now()
   const row: DimRow = {
     id: uid(), key: k, nameCn: ncn, nameEn: nameEn?.trim() ? nameEn.trim() : null,
-    sortOrder: sortOrder ?? 0, isMultiSelect: b(!!isMultiSelect), isEnabled: 1, icon: null,
+    sortOrder: resolvedSort, isMultiSelect: b(!!isMultiSelect), isEnabled: 1, icon: null,
     createdAt: ts, updatedAt: ts, isDeleted: 0,
   }
   await tx(db, 'dimensions', 'readwrite', (s) => putValue(s['dimensions']!, row))
