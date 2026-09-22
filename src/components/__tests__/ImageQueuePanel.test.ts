@@ -6,13 +6,15 @@ import { mount } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
 
 const mockInvoke = vi.fn()
+const mockListen = vi.fn().mockResolvedValue(() => {})
 vi.mock('@tauri-apps/api/core', () => ({
   invoke: (...args: unknown[]) => mockInvoke(...args),
   convertFileSrc: (p: string) => `file://${p}`,
+  isTauri: () => false,
 }))
 
 vi.mock('@tauri-apps/api/event', () => ({
-  listen: vi.fn().mockResolvedValue(() => {}),
+  listen: (...args: unknown[]) => mockListen(...args),
 }))
 
 vi.mock('@/lib/db', () => ({
@@ -33,6 +35,8 @@ beforeEach(() => {
     if (cmd === 'iq_list') return Promise.resolve({ total: 0, items: [] })
     return Promise.reject(new Error(`no backend: ${cmd}`))
   })
+  mockListen.mockReset()
+  mockListen.mockResolvedValue(() => {})
 })
 
 async function mountPanel() {
@@ -74,7 +78,12 @@ describe('运行条禁用态', () => {
 })
 
 describe('降级提示', () => {
-  it('非 Tauri 环境显示降级轮询 amber 条', async () => {
+  it('事件订阅成功时不显示降级轮询条（真机默认走事件通道）', async () => {
+    const w = await mountPanel()
+    expect(w.text()).not.toContain('已降级轮询')
+  })
+  it('事件订阅失败时显示降级轮询 amber 条', async () => {
+    mockListen.mockRejectedValue(new Error('no event channel'))
     const w = await mountPanel()
     expect(w.text()).toContain('已降级轮询')
   })

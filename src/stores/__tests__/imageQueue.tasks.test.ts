@@ -5,13 +5,15 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { createPinia, setActivePinia } from 'pinia'
 
 const mockInvoke = vi.fn()
+const mockListen = vi.fn().mockResolvedValue(() => {})
 vi.mock('@tauri-apps/api/core', () => ({
   invoke: (...args: unknown[]) => mockInvoke(...args),
   convertFileSrc: (p: string) => `file://${p}`,
+  isTauri: () => false,
 }))
 
 vi.mock('@tauri-apps/api/event', () => ({
-  listen: vi.fn().mockResolvedValue(() => {}),
+  listen: (...args: unknown[]) => mockListen(...args),
 }))
 
 import { useImageQueueStore } from '@/stores/imageQueue'
@@ -38,6 +40,8 @@ beforeEach(() => {
     if (cmd === 'iq_get_config') return Promise.resolve({ apiKey: '' })
     return Promise.reject(new Error(`no backend: ${cmd}`))
   })
+  mockListen.mockReset()
+  mockListen.mockResolvedValue(() => {})
   vi.useRealTimers()
 })
 
@@ -83,21 +87,25 @@ describe('halted 各 reason 不崩且 stopped 置 true', () => {
   })
 })
 
-describe('__TAURI__ 缺失降级轮询开关', () => {
-  it('非 Tauri 环境 initQueue 后 degraded=true 且空队列可用', async () => {
-    const g = window as unknown as Record<string, unknown>
-    const prev = g.__TAURI__
-    delete g.__TAURI__
-    try {
-      const iq = useImageQueueStore()
-      await iq.initQueue()
-      expect(iq.degraded).toBe(true)
-      expect(iq.queueReady).toBe(true)
-      expect(iq.order).toEqual([])
-      iq.disposeQueue()
-    } finally {
-      if (prev !== undefined) g.__TAURI__ = prev
-    }
+describe('事件订阅 / 降级轮询开关（先订阅，失败才降级）', () => {
+  it('listen 成功 → 走事件通道，degraded=false', async () => {
+    const iq = useImageQueueStore()
+    await iq.initQueue()
+    expect(mockListen).toHaveBeenCalled()
+    expect(iq.degraded).toBe(false)
+    expect(iq.queueReady).toBe(true)
+    expect(iq.order).toEqual([])
+    iq.disposeQueue()
+  })
+  it('listen 失败 → 降级轮询，degraded=true 且空队列可用', async () => {
+    mockListen.mockRejectedValueOnce(new Error('no event channel'))
+    mockListen.mockRejectedValue(new Error('no event channel'))
+    const iq = useImageQueueStore()
+    await iq.initQueue()
+    expect(iq.degraded).toBe(true)
+    expect(iq.queueReady).toBe(true)
+    expect(iq.order).toEqual([])
+    iq.disposeQueue()
   })
 })
 

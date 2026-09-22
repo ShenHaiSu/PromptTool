@@ -10,6 +10,7 @@ const mockInvoke = vi.fn()
 vi.mock('@tauri-apps/api/core', () => ({
   invoke: (...args: unknown[]) => mockInvoke(...args),
   convertFileSrc: (p: string) => `file://${p}`,
+  isTauri: () => false,
 }))
 
 vi.mock('@/lib/db', () => ({

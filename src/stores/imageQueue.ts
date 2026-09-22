@@ -6,6 +6,7 @@
  */
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
+import { isTauri } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
 import { useToast } from '@/composables/useToast'
 import {
@@ -49,9 +50,20 @@ export function dedupeKeyOf(prompt: string, irHash?: string | null): string {
   return `text:${prompt.trim().replace(/\s+/g, ' ')}`
 }
 
-function isTauriRuntime(): boolean {
+/**
+ * Tauri 运行时判活：优先官方 `isTauri()`（v2 以 `globalThis.isTauri` 为准；
+ * `window.__TAURI__` 仅 `withGlobalTauri=true` 才注入，本项目未开，不可用它判活）。
+ * 测试 mock 缺 `isTauri` 时回落到全局键检查。
+ */
+export function isTauriRuntime(): boolean {
   try {
-    return typeof window !== 'undefined' && Boolean((window as unknown as { __TAURI__?: unknown }).__TAURI__)
+    if (typeof isTauri === 'function') return isTauri()
+  } catch {
+    // fall through
+  }
+  try {
+    const g = window as unknown as Record<string, unknown>
+    return Boolean(g.__TAURI_INTERNALS__ ?? g.__TAURI__)
   } catch {
     return false
   }
@@ -297,6 +309,8 @@ export const useImageQueueStore = defineStore('imageQueue', () => {
   }
 
   async function subscribeEvents(): Promise<void> {
+    // 重复 init（HMR/重挂载）先清旧订阅，避免事件翻倍；hungry 回调与轮询不受影响。
+    while (unlistens.length) unlistens.pop()?.()
     const u1 = await listen<ImageTaskView>('image-queue://task-updated', (e) => applyTaskUpdated(e.payload))
     const u2 = await listen<IqStats>('image-queue://stats', (e) => applyStats(e.payload))
     const u3 = await listen<IqHungryPayload>('image-queue://hungry', (e) => {
@@ -307,12 +321,43 @@ export const useImageQueueStore = defineStore('imageQueue', () => {
     unlistens.push(u1, u2, u3, u4)
   }
 
+  /** 降级轮询同时本地派生四计数（consecFail/stopped 沿用旧值，后端事件回来后覆盖）。 */
+  function deriveStatsFromTasks(): void {
+    let queued = 0
+    let running = 0
+    let succeeded = 0
+    let failed = 0
+    for (const t of tasks.value.values()) {
+      switch (t.status) {
+        case 'queued': queued++; break
+        case 'running': running++; break
+        case 'succeeded': succeeded++; break
+        case 'failed':
+        case 'cancelled': failed++; break
+      }
+    }
+    stats.value = { ...stats.value, queued, running, succeeded, failed }
+  }
+
   function startDegradedPolling(): void {
     degraded.value = true
     if (pollTimer) return
     pollTimer = setInterval(() => {
-      void iqList(0, 100).then((page) => replaceAll(page.items)).catch(() => {})
+      void iqList(0, 100)
+        .then((page) => {
+          replaceAll(page.items)
+          deriveStatsFromTasks()
+        })
+        .catch(() => {})
     }, 3000)
+  }
+
+  function stopDegradedPolling(): void {
+    degraded.value = false
+    if (pollTimer) {
+      clearInterval(pollTimer)
+      pollTimer = null
+    }
   }
 
   async function initQueue(): Promise<void> {
@@ -322,15 +367,13 @@ export const useImageQueueStore = defineStore('imageQueue', () => {
     } catch {
       replaceAll([])
     }
-    if (!isTauriRuntime()) {
-      // 非 Tauri 环境（纯 web 预览/jsdom）：降级轮询
-      startDegradedPolling()
-      queueReady.value = true
-      return
-    }
+    // 先尝试事件订阅：真机成功即走事件通道；失败（预览环境/权限缺失）才降级轮询。
+    // 不再以环境判活直接降级——旧 `window.__TAURI__` 检查在 v2 正式包恒为假（见 isTauriRuntime）。
     try {
       await subscribeEvents()
-    } catch {
+      stopDegradedPolling()
+    } catch (err) {
+      console.warn('[image-queue] 事件订阅失败，已降级轮询：', err instanceof Error ? err.message : String(err))
       startDegradedPolling()
     }
     queueReady.value = true
@@ -348,6 +391,7 @@ export const useImageQueueStore = defineStore('imageQueue', () => {
     }
     pendingStats = null
     hungryHandler = null
+    degraded.value = false
     queueReady.value = false
   }
 
