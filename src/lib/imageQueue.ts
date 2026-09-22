@@ -31,6 +31,8 @@ export const IQ_DEFAULT_OUTPUT_HINT = '<data_dir>/output/images（留空即默�
 export const IQ_KEY_SET_PLACEHOLDER = '__SET__'
 
 export type IqApiKeyState = 'unset' | 'set'
+/** 代理地址与密钥同等敏感：占位语义与 apiKey 完全对称。 */
+export type IqProxyUrlState = 'unset' | 'set'
 
 export interface ImageQueueConfig {
   protocol: IqProtocol
@@ -42,12 +44,17 @@ export interface ImageQueueConfig {
   apiKey: string
   /** 由 iq_get_config 推导，驱动“已设置”徽标。 */
   apiKeyState: IqApiKeyState
+  /** 后端回的脱敏串（有 key 时 `前5***后4`，无 key 时 `""`），仅展示，永不回送。 */
+  apiKeyMasked: string
   outputDir: string
   size: string
   ratio: string
   concurrency: number
   proxyOn: boolean
+  /** 内存值；占位语义与 apiKey 对称：`__SET__` = 服务端已有，保持不变。 */
   proxyUrl: string
+  /** 由 iq_get_config 推导，驱动代理“已设置”提示。 */
+  proxyUrlState: IqProxyUrlState
   rememberKey: boolean
   /** 连接超时秒数，默认 15，范围 5..=60（后端钳制）。 */
   connectTimeoutSecs: number
@@ -62,12 +69,14 @@ export const IQ_DEFAULT_CONFIG: ImageQueueConfig = {
   apiBase: IQ_DEFAULT_API_BASE,
   apiKey: '',
   apiKeyState: 'unset',
+  apiKeyMasked: '',
   outputDir: '',
   size: '1K',
   ratio: '1:1',
   concurrency: 2,
   proxyOn: false,
   proxyUrl: '',
+  proxyUrlState: 'unset',
   rememberKey: true,
   connectTimeoutSecs: 15,
   totalTimeoutSecs: 300,
@@ -98,9 +107,13 @@ export function validateIqConfig(c: ImageQueueConfig): string[] {
   if (!Number.isFinite(c.totalTimeoutSecs) || c.totalTimeoutSecs < 60 || c.totalTimeoutSecs > 600) {
     errs.push('总超时须为 60..600 秒')
   }
+  // 代理占位态（服务端已有、内存置空待保持）跳过地址格式校验：后端收到占位会保持原值。
+  const proxyKeepAlive = c.proxyUrlState === 'set' && c.proxyUrl === ''
   if (c.proxyOn) {
-    if (!isHttpUrl(c.proxyUrl)) errs.push('代理地址须以 http(s):// 开头，本期仅支持 http/https')
-    else if (/^socks5:\/\//i.test(c.proxyUrl.trim())) errs.push('代理地址本期仅支持 http/https，socks5 为二期')
+    if (!proxyKeepAlive) {
+      if (!isHttpUrl(c.proxyUrl)) errs.push('代理地址须以 http(s):// 开头，本期仅支持 http/https')
+      else if (/^socks5:\/\//i.test(c.proxyUrl.trim())) errs.push('代理地址本期仅支持 http/https，socks5 为二期')
+    }
   } else if (c.proxyUrl.trim() && /^socks5:\/\//i.test(c.proxyUrl.trim())) {
     errs.push('代理地址本期仅支持 http/https，socks5 为二期')
   }

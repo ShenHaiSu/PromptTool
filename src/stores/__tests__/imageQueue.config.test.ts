@@ -47,21 +47,56 @@ describe('validateIqConfig', () => {
   it('合法配置无错误', () => {
     expect(validateIqConfig(cfg())).toHaveLength(0)
   })
+  it('代理占位态（已设置未改动）跳过地址校验：proxyOn + 空 proxyUrl + set 态不过错', () => {
+    expect(validateIqConfig(cfg({ proxyOn: true, proxyUrl: '', proxyUrlState: 'set' }))).toHaveLength(0)
+  })
+  it('代理未设置态空地址仍报错', () => {
+    expect(validateIqConfig(cfg({ proxyOn: true, proxyUrl: '', proxyUrlState: 'unset' }))).not.toHaveLength(0)
+  })
 })
 
 describe('__SET__ 占位语义', () => {
   it('configToPayload 未改动 key 时送 __SET__', () => {
-    const p = configToPayload(cfg({ apiKey: '' }), false)
+    const p = configToPayload(cfg({ apiKey: '' }), false, false)
     expect(p.apiKey).toBe(IQ_KEY_SET_PLACEHOLDER)
   })
   it('configToPayload 改动 key 时送真值', () => {
-    const p = configToPayload(cfg({ apiKey: 'sk-real' }), true)
+    const p = configToPayload(cfg({ apiKey: 'sk-real' }), true, false)
     expect(p.apiKey).toBe('sk-real')
+  })
+  it('configToPayload 未改动 proxy 时送 __SET__（与 key 对称）', () => {
+    const p = configToPayload(cfg({ proxyUrl: '' }), false, false)
+    expect(p.proxyUrl).toBe(IQ_KEY_SET_PLACEHOLDER)
+  })
+  it('configToPayload 改动 proxy 时送真值', () => {
+    const p = configToPayload(cfg({ proxyUrl: 'http://127.0.0.1:10808' }), false, true)
+    expect(p.proxyUrl).toBe('http://127.0.0.1:10808')
   })
   it('viewToConfig 把 __SET__ 转 apiKeyState=set 且 apiKey 置空', () => {
     const c = viewToConfig({ apiKey: IQ_KEY_SET_PLACEHOLDER })
     expect(c.apiKeyState).toBe('set')
     expect(c.apiKey).toBe('')
+  })
+  it('viewToConfig 把 proxy __SET__ 转 proxyUrlState=set 且 proxyUrl 置空（不再原文展示占位）', () => {
+    const c = viewToConfig({ apiKey: '', proxyUrl: IQ_KEY_SET_PLACEHOLDER })
+    expect(c.proxyUrlState).toBe('set')
+    expect(c.proxyUrl).toBe('')
+    expect(c).not.toMatchObject({ proxyUrl: IQ_KEY_SET_PLACEHOLDER })
+  })
+  it('viewToConfig 空 proxy 转 proxyUrlState=unset', () => {
+    const c = viewToConfig({ apiKey: '', proxyUrl: '' })
+    expect(c.proxyUrlState).toBe('unset')
+    expect(c.proxyUrl).toBe('')
+  })
+  it('viewToConfig 透传后端脱敏串 apiKeyMasked', () => {
+    const c = viewToConfig({ apiKey: IQ_KEY_SET_PLACEHOLDER, apiKeyMasked: 'sk-se***3456' })
+    expect(c.apiKeyState).toBe('set')
+    expect(c.apiKeyMasked).toBe('sk-se***3456')
+  })
+  it('viewToConfig 未设置 key 时清空脱敏串', () => {
+    const c = viewToConfig({ apiKey: '', apiKeyMasked: 'stale' })
+    expect(c.apiKeyState).toBe('unset')
+    expect(c.apiKeyMasked).toBe('')
   })
 })
 
@@ -70,6 +105,11 @@ describe('localStorage 脱敏', () => {
     const c = cfg({ apiKey: 'sk-super-secret-123', apiKeyState: 'set' })
     const s = JSON.stringify(toLocalCache(c))
     expect(s).not.toContain('sk-super-secret-123')
+  })
+  it('缓存串不含 proxy 明文（与 key 对称）', () => {
+    const c = cfg({ proxyUrl: 'http://127.0.0.1:10808', proxyUrlState: 'set' })
+    const s = JSON.stringify(toLocalCache(c))
+    expect(s).not.toContain('http://127.0.0.1:10808')
   })
 })
 

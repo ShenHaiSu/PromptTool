@@ -29,8 +29,19 @@ const pixelTable = computed(() => {
   return (IQ_SIZES as readonly string[]).map((s) => `${s} ${row[s] ?? '?'}`).join(' · ')
 })
 const socksWarning = computed(() => /^socks5:\/\//i.test(iq.config.proxyUrl.trim()))
-const keyPlaceholder = computed(() =>
-  !iq.keyTouched && iq.config.apiKeyState === 'set' ? '已设置（为保密不回显），聚焦即清空待重输' : 'sk-…',
+const keyPlaceholder = computed(() => {
+  // S2 脱敏回显：占位态直接展示后端脱敏串，明文永不进输入框；聚焦即清空待重输。
+  if (!iq.keyTouched && iq.config.apiKeyState === 'set') {
+    return iq.config.apiKeyMasked
+      ? `${iq.config.apiKeyMasked}（已设置，聚焦即清空待重输）`
+      : '已设置（聚焦即清空待重输）'
+  }
+  return 'sk-…'
+})
+const proxyPlaceholder = computed(() =>
+  !iq.proxyTouched && iq.config.proxyUrlState === 'set'
+    ? '已设置（为保密不回显），聚焦即清空待重输'
+    : 'http://127.0.0.1:10808',
 )
 
 function onApiBaseBlur(): void {
@@ -41,6 +52,11 @@ function onApiBaseBlur(): void {
 function onKeyFocus(): void {
   // 已设置占位聚焦即清空待重输
   if (!iq.keyTouched && iq.config.apiKeyState === 'set') iq.config.apiKey = ''
+}
+
+function onProxyFocus(): void {
+  // 代理与密钥对称：已设置占位聚焦即清空待重输
+  if (!iq.proxyTouched && iq.config.proxyUrlState === 'set') iq.config.proxyUrl = ''
 }
 
 async function onBrowseOutput(): Promise<void> {
@@ -158,7 +174,7 @@ function onResetApiBase(): void {
           />
           <button
             class="absolute right-1 top-1/2 -translate-y-1/2 px-1 text-xs text-muted-foreground"
-            title="显示/隐藏"
+            title="显示/隐藏本次输入（已设置的密钥仅显示脱敏串）"
             @click="showKey = !showKey"
           >
             {{ showKey ? '🙈' : '👁' }}
@@ -166,7 +182,9 @@ function onResetApiBase(): void {
         </div>
       </div>
       <div class="flex items-center justify-between text-xs">
-        <span v-if="iq.config.apiKeyState === 'set'" class="text-[11px] text-green-600">已设置</span>
+        <span v-if="iq.config.apiKeyState === 'set'" class="text-[11px] text-green-600"
+          >已设置{{ iq.config.apiKeyMasked ? ` ${iq.config.apiKeyMasked}` : '' }}</span
+        >
         <span v-else class="text-[11px] text-muted-foreground">未设置</span>
         <label class="flex items-center gap-1">
           <input
@@ -300,11 +318,15 @@ function onResetApiBase(): void {
         <Input
           data-testid="iq-proxy-url"
           class="h-7 flex-1 text-xs"
-          placeholder="http://127.0.0.1:10808"
+          :placeholder="proxyPlaceholder"
           :model-value="iq.config.proxyUrl"
-          @update:model-value="iq.config.proxyUrl = String($event); iq.markDirty()"
+          @update:model-value="iq.config.proxyUrl = String($event); iq.markProxyTouched()"
+          @focus="onProxyFocus"
         />
       </label>
+      <div v-if="!iq.proxyTouched && iq.config.proxyUrlState === 'set'" class="pl-24 text-[11px] text-green-600">
+        已设置（为保密不回显，聚焦即清空待重输；直接保存即保持原值）
+      </div>
       <div v-if="socksWarning" class="pl-24 text-[11px] text-red-600">本期仅支持 http/https</div>
     </div>
 

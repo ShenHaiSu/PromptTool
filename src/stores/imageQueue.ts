@@ -66,6 +66,7 @@ export const useImageQueueStore = defineStore('imageQueue', () => {
   const testResult = ref<IqTestState>(null)
   const dirty = ref(false)
   const keyTouched = ref(false)
+  const proxyTouched = ref(false)
   /** 上次随机的模式（BatchFactory onRandom 写入），饥饿补货沿用。 */
   const lastRandomMode = ref({ usePartial: false, allowNsfw: false })
 
@@ -76,6 +77,11 @@ export const useImageQueueStore = defineStore('imageQueue', () => {
   function markKeyTouched(): void {
     keyTouched.value = true
     // 已设置占位聚焦即清空待重输由组件处理；此处仅记脏
+    markDirty()
+  }
+
+  function markProxyTouched(): void {
+    proxyTouched.value = true
     markDirty()
   }
 
@@ -91,9 +97,17 @@ export const useImageQueueStore = defineStore('imageQueue', () => {
       if (!raw) return
       const cached = JSON.parse(raw) as Partial<ImageQueueConfig>
       if (typeof cached === 'object' && cached) {
-        const { apiKey: _drop, ...rest } = cached as Record<string, unknown>
-        void _drop
-        config.value = { ...IQ_DEFAULT_CONFIG, ...(rest as Partial<ImageQueueConfig>), apiKey: '', apiKeyState: config.value.apiKeyState }
+        const { apiKey: _dropKey, proxyUrl: _dropProxy, ...rest } = cached as Record<string, unknown>
+        void _dropKey
+        void _dropProxy
+        config.value = {
+          ...IQ_DEFAULT_CONFIG,
+          ...(rest as Partial<ImageQueueConfig>),
+          apiKey: '',
+          apiKeyState: config.value.apiKeyState,
+          proxyUrl: '',
+          proxyUrlState: config.value.proxyUrlState,
+        }
       }
     } catch { /* ignore */ }
   }
@@ -107,24 +121,30 @@ export const useImageQueueStore = defineStore('imageQueue', () => {
       // 后端施工中：保留缓存/默认值，保证首屏可用
     }
     keyTouched.value = false
+    proxyTouched.value = false
     dirty.value = false
   }
 
   async function saveConfig(): Promise<boolean> {
     config.value.apiBase = trimTrailingSlash(config.value.apiBase.trim())
-    if (config.value.proxyUrl.trim()) config.value.proxyUrl = trimTrailingSlash(config.value.proxyUrl.trim())
+    if (proxyTouched.value && config.value.proxyUrl.trim()) {
+      config.value.proxyUrl = trimTrailingSlash(config.value.proxyUrl.trim())
+    }
     const errs = validateIqConfig(config.value)
     if (errs.length) {
       push(errs[0]!, 'warning')
       return false
     }
     try {
-      const view = await iqSetConfig(configToPayload(config.value, keyTouched.value))
+      const view = await iqSetConfig(configToPayload(config.value, keyTouched.value, proxyTouched.value))
       const prevKeyState = config.value.apiKeyState
+      const prevProxyState = config.value.proxyUrlState
       config.value = { ...config.value, ...viewToConfig(view) }
-      // 送占位且服务端仍有 key → 保持 set 态
+      // 送占位且服务端仍有值 → 保持 set 态
       if (!keyTouched.value && prevKeyState === 'set') config.value.apiKeyState = 'set'
+      if (!proxyTouched.value && prevProxyState === 'set') config.value.proxyUrlState = 'set'
       keyTouched.value = false
+      proxyTouched.value = false
       dirty.value = false
       push('生图配置已保存', 'success', 1500)
       persistLocalCache()
@@ -137,8 +157,17 @@ export const useImageQueueStore = defineStore('imageQueue', () => {
 
   function resetDefaults(): void {
     const keepKeyState = config.value.apiKeyState
-    config.value = { ...IQ_DEFAULT_CONFIG, apiKey: '', apiKeyState: keepKeyState }
+    const keepProxyState = config.value.proxyUrlState
+    const keepMasked = config.value.apiKeyMasked
+    config.value = {
+      ...IQ_DEFAULT_CONFIG,
+      apiKey: '',
+      apiKeyState: keepKeyState,
+      apiKeyMasked: keepMasked,
+      proxyUrlState: keepProxyState,
+    }
     keyTouched.value = false
+    proxyTouched.value = false
     markDirty()
   }
 
@@ -474,9 +503,11 @@ export const useImageQueueStore = defineStore('imageQueue', () => {
     testResult,
     dirty,
     keyTouched,
+    proxyTouched,
     lastRandomMode,
     markDirty,
     markKeyTouched,
+    markProxyTouched,
     loadConfig,
     saveConfig,
     resetDefaults,

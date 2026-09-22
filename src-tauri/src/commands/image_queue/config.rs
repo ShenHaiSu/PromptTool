@@ -10,7 +10,7 @@
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
-use super::agnes::{SUPPORTED_PROTOCOLS, SUPPORTED_RATIOS, SUPPORTED_SIZES};
+use super::agnes::{mask_secret, SUPPORTED_PROTOCOLS, SUPPORTED_RATIOS, SUPPORTED_SIZES};
 
 /// API 基址默认（Agnes Hub）。
 pub const DEFAULT_API_BASE: &str = "https://apihub.agnes-ai.com";
@@ -82,7 +82,9 @@ impl Default for ImageQueueConfig {
     }
 }
 
-/// 前端可见的配置视图：`apiKey` 只回占位（`__SET__` 表已设置，`""` 表未设置）。
+/// 前端可见的配置视图：`apiKey` 只回占位（`__SET__` 表已设置，`""` 表未设置）；
+/// `apiKeyMasked` 回脱敏串（有 key 时 `前5***后4`，无 key 时 `""`），供配置页直接展示，
+/// 明文永不经此视图外泄。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ImageQueueConfigView {
@@ -91,6 +93,8 @@ pub struct ImageQueueConfigView {
     pub auto_random_on_start: bool,
     pub api_base: String,
     pub api_key: String,
+    #[serde(default)]
+    pub api_key_masked: String,
     pub output_dir: String,
     pub size: String,
     pub ratio: String,
@@ -113,6 +117,11 @@ impl ImageQueueConfig {
                 String::new()
             } else {
                 KEY_SET_PLACEHOLDER.to_string()
+            },
+            api_key_masked: if self.api_key.is_empty() {
+                String::new()
+            } else {
+                mask_secret(&self.api_key)
             },
             output_dir: self.output_dir.clone(),
             size: self.size.clone(),
@@ -446,19 +455,23 @@ mod tests {
     #[test]
     fn view_masks_key_and_proxy() {
         let mut c = ImageQueueConfig::default();
-        c.api_key = "sk-secret".into();
+        c.api_key = "sk-secret-abcdef123456".into();
         c.proxy_url = "http://127.0.0.1:10808".into();
         let v = c.view();
         assert_eq!(v.api_key, "__SET__");
         assert_eq!(v.proxy_url, "__SET__");
+        // 脱敏串可见但不含明文
+        assert!(!v.api_key_masked.is_empty());
+        assert!(!v.api_key_masked.contains("sk-secret-abcdef123456"));
         // 序列化视图不含明文
         let json = serde_json::to_string(&v).unwrap();
-        assert!(!json.contains("sk-secret"));
+        assert!(!json.contains("sk-secret-abcdef123456"));
         // Config 本体序列化也不含 api_key（skip_serializing）
         let raw = serde_json::to_string(&c).unwrap();
-        assert!(!raw.contains("sk-secret"));
+        assert!(!raw.contains("sk-secret-abcdef123456"));
         let empty = ImageQueueConfig::default().view();
         assert_eq!(empty.api_key, "");
+        assert_eq!(empty.api_key_masked, "");
     }
 
     #[test]

@@ -47,34 +47,40 @@ export interface IqTestResult {
 }
 
 /** 后端纠正视图：apiKey 为 `__SET__` 占位或空串。 */
-export type IqConfigView = Omit<ImageQueueConfig, 'apiKeyState'> & { apiKey: string }
+/** 后端视图：占位字段回 `__SET__`， state 字段不出后端（前端推导）。 */
+export type IqConfigView = Omit<ImageQueueConfig, 'apiKeyState' | 'proxyUrlState'> & {
+  apiKey: string
+}
 
-/** 前端内存态 → 后端 payload（含 `__SET__` 占位逻辑：未改动 key 时送占位）。 */
-export function configToPayload(c: ImageQueueConfig, keyTouched: boolean): IqConfigView {
+/** 前端内存态 → 后端 payload（含 `__SET__` 占位逻辑：未改动 key / proxy 时送占位保持原值）。 */
+export function configToPayload(c: ImageQueueConfig, keyTouched: boolean, proxyTouched: boolean): IqConfigView {
   return {
     protocol: c.protocol,
     loopEnabled: c.loopEnabled,
     autoRandomOnStart: c.autoRandomOnStart,
     apiBase: c.apiBase,
     apiKey: keyTouched ? c.apiKey : IQ_KEY_SET_PLACEHOLDER,
+    apiKeyMasked: c.apiKeyMasked,
     outputDir: c.outputDir,
     size: c.size,
     ratio: c.ratio,
     concurrency: c.concurrency,
     proxyOn: c.proxyOn,
-    proxyUrl: c.proxyUrl,
+    proxyUrl: proxyTouched ? c.proxyUrl : IQ_KEY_SET_PLACEHOLDER,
     rememberKey: c.rememberKey,
     connectTimeoutSecs: c.connectTimeoutSecs,
     totalTimeoutSecs: c.totalTimeoutSecs,
   }
 }
 
-/** 后端视图 → 前端内存态（占位转 `apiKeyState='set'`，apiKey 置空等待重输）。 */
+/** 后端视图 → 前端内存态（占位转 `*State='set'`，原文置空等待重输；脱敏串仅展示）。 */
 export function viewToConfig(view: Partial<IqConfigView>): ImageQueueConfig {
   const merged: ImageQueueConfig = { ...IQ_DEFAULT_CONFIG, ...(view as object) } as ImageQueueConfig
   // 兼容旧 localStorage / 旧后端回包缺超时字段的情形
   if (!Number.isFinite(merged.connectTimeoutSecs)) merged.connectTimeoutSecs = IQ_DEFAULT_CONFIG.connectTimeoutSecs
   if (!Number.isFinite(merged.totalTimeoutSecs)) merged.totalTimeoutSecs = IQ_DEFAULT_CONFIG.totalTimeoutSecs
+  // 兼容旧后端回包缺 apiKeyMasked 的情形
+  if (typeof merged.apiKeyMasked !== 'string') merged.apiKeyMasked = ''
   if ((view.apiKey ?? '') === IQ_KEY_SET_PLACEHOLDER) {
     merged.apiKey = ''
     merged.apiKeyState = 'set'
@@ -84,15 +90,28 @@ export function viewToConfig(view: Partial<IqConfigView>): ImageQueueConfig {
   } else {
     merged.apiKey = ''
     merged.apiKeyState = 'unset'
+    merged.apiKeyMasked = ''
+  }
+  // 代理与密钥对称：占位/真值一律转 set 态且内存置空（明文不出内存/缓存）。
+  if ((view.proxyUrl ?? '') === IQ_KEY_SET_PLACEHOLDER) {
+    merged.proxyUrl = ''
+    merged.proxyUrlState = 'set'
+  } else if (view.proxyUrl) {
+    merged.proxyUrl = ''
+    merged.proxyUrlState = 'set'
+  } else {
+    merged.proxyUrl = ''
+    merged.proxyUrlState = 'unset'
   }
   return merged
 }
 
-/** localStorage 只存非敏感字段（apiKey 永不进 localStorage）。 */
+/** localStorage 只存非敏感字段（apiKey / proxyUrl 明文永不进 localStorage）。 */
 export function toLocalCache(c: ImageQueueConfig): Record<string, unknown> {
-  const { apiKey: _omit, ...rest } = c
-  void _omit
-  return { ...rest, apiKeyState: c.apiKeyState }
+  const { apiKey: _omitKey, proxyUrl: _omitProxy, ...rest } = c
+  void _omitKey
+  void _omitProxy
+  return { ...rest, apiKeyState: c.apiKeyState, proxyUrlState: c.proxyUrlState }
 }
 
 export async function iqGetConfig(): Promise<IqConfigView> {
