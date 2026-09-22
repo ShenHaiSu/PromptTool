@@ -56,6 +56,8 @@ export interface ImageQueueConfig {
   /** 由 iq_get_config 推导，驱动代理“已设置”提示。 */
   proxyUrlState: IqProxyUrlState
   rememberKey: boolean
+  /** 图片内嵌生图参数总开关（need06 embed-only），默认 true；false = 纯原图（应急回滚用）。 */
+  embedMeta: boolean
   /** 连接超时秒数，默认 15，范围 5..=60（后端钳制）。 */
   connectTimeoutSecs: number
   /** 总超时秒数，默认 300，范围 60..=600（后端钳制）。 */
@@ -78,6 +80,7 @@ export const IQ_DEFAULT_CONFIG: ImageQueueConfig = {
   proxyUrl: '',
   proxyUrlState: 'unset',
   rememberKey: true,
+  embedMeta: true,
   connectTimeoutSecs: 15,
   totalTimeoutSecs: 300,
 }

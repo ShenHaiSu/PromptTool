@@ -36,7 +36,13 @@ export interface IqStats {
 export interface IqHungryPayload { want: number }
 export interface IqHaltedPayload { reason: 'manual' | 'circuit' | 'io' | 'disk'; message?: string }
 
-export interface IqEnqueueItem { prompt: string; irHash?: string | null }
+export interface IqEnqueueItem {
+  prompt: string
+  irHash?: string | null
+  /** 一键复用下单带的单条 size/ratio；缺省时后端回落当前配置快照。 */
+  size?: string
+  ratio?: string
+}
 export interface IqEnqueueResult { enqueued: number; skipped: number; ids: string[] }
 
 export interface IqTestResult {
@@ -68,6 +74,7 @@ export function configToPayload(c: ImageQueueConfig, keyTouched: boolean, proxyT
     proxyOn: c.proxyOn,
     proxyUrl: proxyTouched ? c.proxyUrl : IQ_KEY_SET_PLACEHOLDER,
     rememberKey: c.rememberKey,
+    embedMeta: c.embedMeta,
     connectTimeoutSecs: c.connectTimeoutSecs,
     totalTimeoutSecs: c.totalTimeoutSecs,
   }
@@ -79,6 +86,8 @@ export function viewToConfig(view: Partial<IqConfigView>): ImageQueueConfig {
   // 兼容旧 localStorage / 旧后端回包缺超时字段的情形
   if (!Number.isFinite(merged.connectTimeoutSecs)) merged.connectTimeoutSecs = IQ_DEFAULT_CONFIG.connectTimeoutSecs
   if (!Number.isFinite(merged.totalTimeoutSecs)) merged.totalTimeoutSecs = IQ_DEFAULT_CONFIG.totalTimeoutSecs
+  // 兼容旧后端回包缺 embedMeta 的情形（旧 image_queue.json 无此字段 → 默认 true）
+  if (typeof merged.embedMeta !== 'boolean') merged.embedMeta = true
   // 兼容旧后端回包缺 apiKeyMasked 的情形
   if (typeof merged.apiKeyMasked !== 'string') merged.apiKeyMasked = ''
   if ((view.apiKey ?? '') === IQ_KEY_SET_PLACEHOLDER) {
@@ -156,4 +165,21 @@ export async function iqList(
   status?: string,
 ): Promise<{ total: number; items: ImageTaskView[] }> {
   return invoke<{ total: number; items: ImageTaskView[] }>('iq_list', { offset, limit, status: status ?? null })
+}
+
+/** 内嵌生图参数（need06）：与旧 sidecar 同构，无内嵌返回 null。 */
+export interface EmbeddedImageMeta {
+  prompt: string
+  irHash?: string | null
+  size: string
+  ratio: string
+  model: string
+  imageUrl: string
+  elapsedMs: number
+  createdAt: number
+  taskId: string
+}
+
+export async function readImageMeta(filePath: string): Promise<EmbeddedImageMeta | null> {
+  return await invoke<EmbeddedImageMeta | null>('iq_read_image_meta', { filePath })
 }

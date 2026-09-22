@@ -45,12 +45,19 @@ pub struct ImageQueueConfig {
     pub proxy_url: String,
     /// 是否落盘密钥。
     pub remember_key: bool,
+    /// 图片内嵌生图参数总开关（need06 embed-only），默认 true；false = 纯原图（应急回滚用）。
+    #[serde(default = "default_true")]
+    pub embed_meta: bool,
     /// 默认 15，范围 5..=60。
     #[serde(default = "default_connect_timeout_secs")]
     pub connect_timeout_secs: u64,
     /// 默认 300，范围 60..=600。
     #[serde(default = "default_total_timeout_secs")]
     pub total_timeout_secs: u64,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 fn default_connect_timeout_secs() -> u64 {
@@ -76,6 +83,7 @@ impl Default for ImageQueueConfig {
             proxy_on: false,
             proxy_url: String::new(),
             remember_key: false,
+            embed_meta: true,
             connect_timeout_secs: 15,
             total_timeout_secs: 300,
         }
@@ -102,6 +110,8 @@ pub struct ImageQueueConfigView {
     pub proxy_on: bool,
     pub proxy_url: String,
     pub remember_key: bool,
+    #[serde(default = "default_true")]
+    pub embed_meta: bool,
     pub connect_timeout_secs: u64,
     pub total_timeout_secs: u64,
 }
@@ -135,6 +145,7 @@ impl ImageQueueConfig {
                 KEY_SET_PLACEHOLDER.to_string()
             },
             remember_key: self.remember_key,
+            embed_meta: self.embed_meta,
             connect_timeout_secs: self.connect_timeout_secs,
             total_timeout_secs: self.total_timeout_secs,
         }
@@ -336,6 +347,30 @@ mod tests {
         assert_eq!(c.connect_timeout_secs, 15);
         assert_eq!(c.total_timeout_secs, 300);
         assert!(!c.loop_enabled && !c.auto_random_on_start && !c.proxy_on);
+        assert!(c.embed_meta);
+    }
+
+    #[test]
+    fn legacy_payload_missing_embed_meta_defaults_true() {
+        // 回归：need06 前的 image_queue.json 无 embedMeta 字段，反序列化应回 true（新默认）。
+        let raw = serde_json::json!({
+            "protocol": "agnes",
+            "loopEnabled": false,
+            "apiBase": DEFAULT_API_BASE,
+            "outputDir": "",
+            "size": "1K",
+            "ratio": "1:1",
+            "concurrency": 2,
+            "proxyOn": false,
+            "proxyUrl": "",
+            "rememberKey": true,
+            "connectTimeoutSecs": 15,
+            "totalTimeoutSecs": 300
+        });
+        let cfg: ImageQueueConfig = serde_json::from_value(raw).expect("旧配置应兼容 embedMeta 默认值");
+        assert!(cfg.embed_meta);
+        // view 透传
+        assert!(cfg.view().embed_meta);
     }
 
     #[test]

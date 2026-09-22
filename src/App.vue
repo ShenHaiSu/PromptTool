@@ -15,6 +15,7 @@ import { useShortcuts } from '@/composables/useShortcuts'
 import { useThemeStore } from '@/stores/theme'
 import BusinessDbOnboardingDialog from '@/components/BusinessDbOnboardingDialog.vue'
 import DbManagerDrawer from '@/components/DbManagerDrawer.vue'
+import ImageTaskDetailDialog from '@/components/ImageTaskDetailDialog.vue'
 import { useDbRegistryStore } from '@/stores/dbRegistry'
 import { useLibraryStore } from '@/stores/library'
 import { dbGetTempCarry } from '@/lib/db'
@@ -313,5 +314,8 @@ onBeforeUnmount(() => {
         {{ t.message }}
       </div>
     </div>
+
+    <!-- 生图任务详情顶层 Dialog（need06）：Teleport 到 body，免虚拟化 transform 裁剪 -->
+    <ImageTaskDetailDialog />
   </div>
 </template>

@@ -106,7 +106,7 @@ pub fn run() {
             commands::export::db_reveal_in_explorer,
             commands::translation::db_batch_update_display_names,
             commands::translation::db_batch_update_display_names_text,
-            // --- Need05: 生图队列 10 命令 ---
+            // --- Need05: 生图队列 10 命令 + need06 解析入口 1 命令 ---
             commands::image_queue::queue::iq_set_config,
             commands::image_queue::queue::iq_get_config,
             commands::image_queue::queue::iq_test_connection,
@@ -116,7 +116,8 @@ pub fn run() {
             commands::image_queue::queue::iq_retry,
             commands::image_queue::queue::iq_remove,
             commands::image_queue::queue::iq_clear_finished,
-            commands::image_queue::queue::iq_list
+            commands::image_queue::queue::iq_list,
+            commands::image_queue::queue::iq_read_image_meta
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

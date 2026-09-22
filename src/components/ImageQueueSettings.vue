@@ -298,6 +298,16 @@ function onResetApiBase(): void {
         />
         <span class="text-[11px] text-muted-foreground">60..600</span>
       </label>
+      <label class="flex items-center gap-2 text-xs">
+        <input
+          data-testid="iq-embed-meta"
+          type="checkbox"
+          class="h-3.5 w-3.5 accent-primary"
+          :checked="iq.config.embedMeta"
+          @change="iq.config.embedMeta = ($event.target as HTMLInputElement).checked; iq.markDirty()"
+        />
+        <span>图片内嵌参数（embed_meta，关即纯原图）</span>
+      </label>
     </div>
 
     <!-- 网络组 -->

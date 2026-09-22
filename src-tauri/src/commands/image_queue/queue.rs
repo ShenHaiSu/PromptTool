@@ -21,11 +21,12 @@ use std::sync::{
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Manager, State};
 
-use super::agnes::{generate_one, mask_secret, AgnesProvider, IqError, PROBE_PROMPT};
+use super::agnes::{generate_one, mask_secret, AgnesProvider, IqError, PROBE_PROMPT, SUPPORTED_RATIOS, SUPPORTED_SIZES};
 use super::config::{
     build_client, delete_secrets, load_config, load_secrets, save_config, save_secrets, ClientFingerprint,
     ImageQueueConfig, ImageQueueConfigView, KEY_SET_PLACEHOLDER,
 };
+use super::embed::{embed_jpg, embed_png, extract_embedded_meta};
 
 // ------------------------------------------------------------------
 // 常量
@@ -43,7 +44,7 @@ pub const PROMPT_MAX_CHARS: usize = 4000;
 pub const MAX_RETRY: u8 = 2;
 /// 单张图片下载上限 100MB，超限中止。
 pub const MAX_IMAGE_BYTES: u64 = 100 * 1024 * 1024;
-/// Agnes 模型名（落盘 sidecar 用）。
+/// Agnes 模型名（图片内嵌 meta 用）。
 const AGNES_MODEL: &str = "agnes-image-2.5-flash";
 
 pub const EVT_TASK_UPDATED: &str = "image-queue://task-updated";
@@ -129,6 +130,11 @@ pub struct ImageTask {
 pub struct EnqueueItem {
     pub prompt: String,
     pub ir_hash: Option<String>,
+    /// 一键复用下单（need06 复用 Dialog）：单条指定的 size/ratio；缺省或非法时回落当前配置快照。
+    #[serde(default)]
+    pub size: Option<String>,
+    #[serde(default)]
+    pub ratio: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -304,6 +310,27 @@ pub fn prompt_hash8(prompt: &str) -> String {
         h = h.wrapping_mul(33).wrapping_add(*b as u64);
     }
     format!("{:08x}", h & 0xffff_ffff)
+}
+
+/// 单条入队的 size/ratio 决议（一键复用下单用）：item 值经 trim 后在白名单则采用，
+/// 否则回落当前配置快照（旧前端不送这两字段时行为与 need05 一致）。
+pub fn resolve_item_size_ratio(
+    item_size: Option<&str>,
+    item_ratio: Option<&str>,
+    cfg_size: &str,
+    cfg_ratio: &str,
+) -> (String, String) {
+    let size = item_size
+        .map(str::trim)
+        .filter(|s| SUPPORTED_SIZES.contains(s))
+        .unwrap_or(cfg_size)
+        .to_string();
+    let ratio = item_ratio
+        .map(str::trim)
+        .filter(|s| SUPPORTED_RATIOS.contains(s))
+        .unwrap_or(cfg_ratio)
+        .to_string();
+    (size, ratio)
 }
 
 /// 文件名模板：`{yyyyMMdd_HHmmss}_{seq}_{size}_{ratio}_{hash8}.{ext}`。
@@ -529,7 +556,8 @@ fn same_day_count(tasks: &HashMap<String, ImageTask>, now_ts: i64) -> usize {
         .count()
 }
 
-/// 流式下载 + 落盘（不全量进内存）：分块写 `.tmp` → 魔数校验 → 原子 rename + 同名 sidecar json。
+/// 有界内存累积下载 + 落盘：累积 `Vec<u8>`（复用 100MB 守卫）→ 魔数校验
+/// + PNG-iTXt / JPG-COM 内嵌元数据（embed-only，无 sidecar）→ 写 `.tmp` → 原子 rename。
 /// 与 API 共用同一 client（保证代理环境一致）。
 async fn download_and_persist(
     app: &AppHandle,
@@ -567,13 +595,11 @@ async fn download_and_persist(
     let tmp_path = dir.join(format!("{}.tmp", fname.to_string_lossy()));
     let final_path = dir.join(&fname);
 
-    // 流式写文件（futures::StreamExt，reqwest "stream" feature）。
+    // 有界内存累积（futures::StreamExt，reqwest "stream" feature）。
     use futures::StreamExt;
-    use tokio::io::AsyncWriteExt;
-    let mut file = tokio::fs::File::create(&tmp_path).await.map_err(|e| format!("io:创建临时文件失败：{}", e))?;
+    let mut buf: Vec<u8> = Vec::new();
     let mut stream = resp.bytes_stream();
     let mut total: u64 = 0;
-    let mut head: Vec<u8> = Vec::with_capacity(16);
     while let Some(chunk) = stream.next().await {
         let bytes = chunk.map_err(|e| format!("下载中断：{}", e))?;
         total += bytes.len() as u64;
@@ -581,22 +607,13 @@ async fn download_and_persist(
             let _ = tokio::fs::remove_file(&tmp_path).await;
             return Err("图片超过 100MB 上限，已中止".to_string());
         }
-        if head.len() < 16 {
-            let need = 16 - head.len();
-            head.extend_from_slice(&bytes[..bytes.len().min(need)]);
-        }
-        file.write_all(&bytes).await.map_err(|e| format!("io:写入失败：{}", e))?;
+        buf.extend_from_slice(&bytes);
     }
-    file.flush().await.map_err(|e| format!("io:刷盘失败：{}", e))?;
-    drop(file);
-    if !has_image_magic(&head) {
+    if !has_image_magic(&buf[..buf.len().min(16)]) {
         let _ = std::fs::remove_file(&tmp_path);
         return Err("下载内容魔数校验失败（非 PNG/JPEG/GIF/WEBP/BMP）".to_string());
     }
-    std::fs::rename(&tmp_path, &final_path).map_err(|e| format!("io:文件重命名失败：{}", e))?;
-
-    // 同名 sidecar json（复现元数据；失败仅记日志，不影响成功状态）。
-    let sidecar = final_path.with_extension("json");
+    // 内嵌元数据（仅 png/jpg；失败回退原图，任务仍成功）。
     let meta = serde_json::json!({
         "prompt": task.prompt,
         "irHash": task.ir_hash,
@@ -608,9 +625,24 @@ async fn download_and_persist(
         "createdAt": task.created_at,
         "taskId": task.id,
     });
-    if let Err(e) = std::fs::write(&sidecar, serde_json::to_string_pretty(&meta).unwrap_or_default()) {
-        eprintln!("[image-queue] sidecar 写入失败（忽略）：{}", e);
-    }
+    let meta_bytes = serde_json::to_string(&meta).unwrap_or_default().into_bytes();
+    let out: Vec<u8> = if cfg.embed_meta {
+        match ext {
+            "png" => embed_png(&buf, &meta_bytes).unwrap_or_else(|e| {
+                eprintln!("[image-queue] png 嵌入失败，回退原图：{}", e);
+                buf.clone()
+            }),
+            "jpg" => embed_jpg(&buf, &meta_bytes).unwrap_or_else(|e| {
+                eprintln!("[image-queue] jpg 嵌入失败，回退原图：{}", e);
+                buf.clone()
+            }),
+            _ => buf,
+        }
+    } else {
+        buf
+    };
+    tokio::fs::write(&tmp_path, &out).await.map_err(|e| format!("io:写入失败：{}", e))?;
+    std::fs::rename(&tmp_path, &final_path).map_err(|e| format!("io:文件重命名失败：{}", e))?;
     Ok(final_path.to_string_lossy().to_string())
 }
 
@@ -920,7 +952,7 @@ fn mark_running_cancelled(app: &AppHandle, st: &ImageQueueState) {
 }
 
 // ------------------------------------------------------------------
-// 命令（10 个，`lib.rs` 注册；invoke 参数名以 Rust snake_case 的 camelCase 为准）
+// 命令（11 个，`lib.rs` 注册；invoke 参数名以 Rust snake_case 的 camelCase 为准）
 // ------------------------------------------------------------------
 
 #[tauri::command]
@@ -1048,7 +1080,7 @@ pub fn iq_enqueue(
         tasks.values().filter(|t| t.status != TaskStatus::Cancelled).map(|t| dedupe_key(t.ir_hash.as_deref(), &t.prompt)).collect()
     };
     let mut seen = existing;
-    let (size, ratio) = {
+    let (cfg_size, cfg_ratio) = {
         let cfg = state.config.lock().map_err(|e| format!("配置锁失败：{}", e))?;
         (cfg.size.clone(), cfg.ratio.clone())
     };
@@ -1079,12 +1111,15 @@ pub fn iq_enqueue(
                 (prompt_trimmed.to_string(), false)
             };
             let id = uuid::Uuid::new_v4().to_string();
+            // 单条 size/ratio（复用下单带参时采用，非法/缺省回落配置快照）。
+            let (size, ratio) =
+                resolve_item_size_ratio(item.size.as_deref(), item.ratio.as_deref(), &cfg_size, &cfg_ratio);
             let task = ImageTask {
                 id: id.clone(),
                 prompt,
                 ir_hash: item.ir_hash.clone().map(|s| s.trim().to_string()).filter(|s| !s.is_empty()),
-                size: size.clone(),
-                ratio: ratio.clone(),
+                size,
+                ratio,
                 status: TaskStatus::Queued,
                 image_url: None,
                 file_path: None,
@@ -1262,6 +1297,28 @@ pub fn iq_list(
     Ok(ListResult { total, items })
 }
 
+/// 解析图片内嵌生图参数（need06）：传入图片路径即可读回 `prompt/size/ratio/...`。
+/// 无内嵌数据 → `Ok(None)`；格式损坏/超限 → `Err`。
+#[tauri::command]
+pub fn iq_read_image_meta(file_path: String) -> Result<Option<serde_json::Value>, String> {
+    let path = PathBuf::from(&file_path);
+    let meta = std::fs::metadata(&path).map_err(|e| format!("读取文件失败：{}", e))?;
+    if meta.len() > MAX_IMAGE_BYTES {
+        return Err("文件超过 100MB 上限".to_string());
+    }
+    let bytes = std::fs::read(&path).map_err(|e| format!("读取文件失败：{}", e))?;
+    let ext = path
+        .extension()
+        .and_then(|s| s.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    let ext = if ext == "jpeg" { "jpg".to_string() } else { ext };
+    if ext.is_empty() {
+        return Ok(None);
+    }
+    extract_embedded_meta(&bytes, &ext)
+}
+
 // 提供 Agnes provider 复用（test_connection 的解析经 generate_one 内部完成）。
 #[allow(dead_code)]
 fn _provider() -> AgnesProvider {
@@ -1352,6 +1409,38 @@ mod tests {
         assert!(has_image_magic(&[0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]));
         assert!(has_image_magic(&[0xFF, 0xD8, 0xFF, 0x00]));
         assert!(!has_image_magic(b"{not an image}..."));
+    }
+
+    #[test]
+    fn resolve_item_size_ratio_prefers_valid_item() {
+        // 合法 item 值采用
+        assert_eq!(
+            resolve_item_size_ratio(Some("2K"), Some("16:9"), "1K", "1:1"),
+            ("2K".to_string(), "16:9".to_string())
+        );
+        // 缺省回落配置
+        assert_eq!(
+            resolve_item_size_ratio(None, None, "1K", "1:1"),
+            ("1K".to_string(), "1:1".to_string())
+        );
+        // 非法回落配置（旧前端不送字段 / 复用脏数据时行为与 need05 一致）
+        assert_eq!(
+            resolve_item_size_ratio(Some("8K"), Some("4:5"), "1K", "1:1"),
+            ("1K".to_string(), "1:1".to_string())
+        );
+        // trim 后命中白名单
+        assert_eq!(
+            resolve_item_size_ratio(Some(" 2K "), Some(" 1:1 "), "1K", "16:9"),
+            ("2K".to_string(), "1:1".to_string())
+        );
+    }
+
+    #[test]
+    fn legacy_enqueue_item_without_size_ratio_deserializes() {
+        // 回归：need05 旧 payload 无 size/ratio 字段，反序列化应为 None（回落配置快照）。
+        let raw = serde_json::json!({ "prompt": "a cat", "irHash": null });
+        let item: EnqueueItem = serde_json::from_value(raw).expect("旧入队 payload 应兼容");
+        assert!(item.size.is_none() && item.ratio.is_none());
     }
 
     #[test]

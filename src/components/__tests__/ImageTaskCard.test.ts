@@ -95,3 +95,51 @@ describe('复制成功 toast', () => {
     expect(writeText).toHaveBeenCalled()
   })
 })
+
+describe('整卡点击拉起顶层 Dialog（方案 B）', () => {
+  it('点击卡片本体打开 dialog，读到内嵌 meta', async () => {
+    mockInvoke.mockImplementation((cmd: unknown) => {
+      if (cmd === 'iq_read_image_meta') {
+        return Promise.resolve({
+          prompt: 'a cat',
+          irHash: null,
+          size: '1K',
+          ratio: '1:1',
+          model: 'agnes-image-2.5-flash',
+          imageUrl: 'https://x/y.png',
+          elapsedMs: 1,
+          createdAt: 1,
+          taskId: 'd1',
+        })
+      }
+      return Promise.reject(new Error(`unexpected invoke ${String(cmd)}`))
+    })
+    const { useImageTaskDialog } = await import('@/composables/useImageTaskDialog')
+    const dialog = useImageTaskDialog()
+    const w = mount(ImageTaskCard, {
+      props: { model: task({ id: 'd1', status: 'succeeded', filePath: 'C:/pics/a.png' }) },
+      global: { plugins: [createPinia()] },
+    })
+    await w.find('[data-testid="image-task-d1"]').trigger('click')
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(dialog.opened.value).toBe(true)
+    expect(dialog.embedded.value?.prompt).toBe('a cat')
+    dialog.close()
+  })
+
+  it('卡内按钮点击不冒泡拉起 dialog', async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined)
+    Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true })
+    const { useImageTaskDialog } = await import('@/composables/useImageTaskDialog')
+    const dialog = useImageTaskDialog()
+    const w = mount(ImageTaskCard, {
+      props: { model: task({ id: 's1', status: 'succeeded', filePath: 'C:/pics/a.png' }) },
+      global: { plugins: [createPinia()] },
+    })
+    await w.find('[data-testid="image-task-copy-s1"]').trigger('click')
+    expect(writeText).toHaveBeenCalled()
+    expect(dialog.opened.value).toBe(false)
+    expect(mockInvoke).not.toHaveBeenCalledWith('iq_read_image_meta', expect.anything())
+  })
+})

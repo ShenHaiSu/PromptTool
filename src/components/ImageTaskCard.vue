@@ -4,6 +4,7 @@ import { Card } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { useToast } from '@/composables/useToast'
+import { useImageTaskDialog } from '@/composables/useImageTaskDialog'
 import type { ImageTaskView } from '@/lib/imageQueueApi'
 import { useImageQueueStore } from '@/stores/imageQueue'
 
@@ -11,8 +12,14 @@ const props = defineProps<{ model: ImageTaskView }>()
 
 const { push } = useToast()
 const iq = useImageQueueStore()
+const detailDialog = useImageTaskDialog()
 
 const expanded = ref(false)
+
+/** 整卡点击拉起顶层详情 Dialog（need06 复用 Dialog，方案 B）。 */
+function openDetail(): void {
+  void detailDialog.open(props.model)
+}
 
 const statusMeta = computed(() => {
   switch (props.model.status) {
@@ -62,7 +69,8 @@ const elapsedText = computed(() =>
 <template>
   <Card
     :data-testid="`image-task-${model.id}`"
-    class="p-3"
+    class="cursor-pointer p-3"
+    @click="openDetail"
   >
     <div class="flex items-center gap-2">
       <Badge class="h-5 px-1.5 text-[10px]" :class="statusMeta.cls">{{ statusMeta.label }}</Badge>
@@ -75,7 +83,7 @@ const elapsedText = computed(() =>
           variant="ghost"
           class="h-6 px-2 text-xs"
           title="复制 prompt"
-          @click="onCopy"
+          @click.stop="onCopy"
           >复制</Button
         >
         <Button
@@ -85,8 +93,18 @@ const elapsedText = computed(() =>
           variant="outline"
           class="h-6 px-2 text-xs"
           title="重试"
-          @click="onRetry"
+          @click.stop="onRetry"
           >重试</Button
+        >
+        <Button
+          v-if="model.status === 'succeeded' && model.filePath"
+          :data-testid="`image-task-meta-${model.id}`"
+          size="sm"
+          variant="outline"
+          class="h-6 px-2 text-xs"
+          title="查看生图参数"
+          @click.stop="openDetail"
+          >参数</Button
         >
         <Button
           :data-testid="`image-task-remove-${model.id}`"
@@ -95,7 +113,7 @@ const elapsedText = computed(() =>
           class="h-6 px-2 text-xs"
           :title="model.status === 'running' ? '运行中不可删，请先停止' : '删除'"
           :disabled="model.status === 'running'"
-          @click="onRemove"
+          @click.stop="onRemove"
           >删除</Button
         >
       </div>
@@ -109,7 +127,7 @@ const elapsedText = computed(() =>
       <button
         v-if="model.prompt.length > 60"
         class="ml-1 text-[11px] text-primary"
-        @click="expanded = !expanded"
+        @click.stop="expanded = !expanded"
       >
         {{ expanded ? '收起' : '展开' }}
       </button>
