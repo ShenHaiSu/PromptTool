@@ -82,7 +82,7 @@ describe('DimensionPanel — need05 禁用能力 (Ctrl+Click)', () => {
     expect(dbMocks.dbUpdateDimension).toHaveBeenCalledWith(expect.objectContaining({ isEnabled: false }))
     const header = w.find('[data-testid="dimension-header-top"]')
     expect(header.classes().join(' ')).toContain('opacity-60')
-    expect(header.attributes('title')).toContain('Ctrl+点击可启用')
+    expect(header.attributes('title')).toContain('Ctrl+点击或右键菜单可启用')
     w.unmount()
   })
 
@@ -209,7 +209,7 @@ describe('DimensionPanel — need05 禁用能力 (Ctrl+Click)', () => {
     await flush(w)
     await w.find('[data-testid="dimension-header-top"]').trigger('click', { ctrlKey: true })
     await flush(w)
-    expect(w.find('[data-testid="dimension-header-top"]').attributes('title')).toContain('Ctrl+点击可启用')
+    expect(w.find('[data-testid="dimension-header-top"]').attributes('title')).toContain('Ctrl+点击或右键菜单可启用')
     await w.find('[data-testid="dimension-header-top"]').trigger('click', { ctrlKey: true })
     await flush(w)
     expect(dbMocks.dbUpdateDimension).toHaveBeenLastCalledWith(expect.objectContaining({ isEnabled: true }))

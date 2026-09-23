@@ -7,10 +7,10 @@ import { Button } from '@/components/ui/button'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { useAssemblyStore } from '@/stores/assembly'
 import { useHistoryStore } from '@/stores/history'
-import {
-  dbCreateDimension, dbUpdateDimension,
-  dbCreateModule, dbUpdateModule, dbSoftDeleteModule,
-} from '@/lib/db'
+ import {
+   dbCreateDimension, dbUpdateDimension,
+   dbCreateModule, dbUpdateModule, dbSoftDeleteModule, dbMigrateDimension,
+ } from '@/lib/db'
 import DimensionEditDialog from '@/components/DimensionEditDialog.vue'
 import ModuleEditDialog from '@/components/ModuleEditDialog.vue'
 import ModuleBatchDialog from '@/components/ModuleBatchDialog.vue'
@@ -22,7 +22,8 @@ import { dimColor } from '@/lib/utils'
 import type { Dimension, Module } from '@/engine/models'
 import { calcPopoverPos, POPOVER_W, POPOVER_H_EST, MENU_W, MENU_H_EST, calcMenuPos } from '@/lib/need05Position'
 import DimensionTranslateDialog from '@/components/DimensionTranslateDialog.vue'
-import DimensionGenerateDialog from '@/components/DimensionGenerateDialog.vue'
+ import DimensionGenerateDialog from '@/components/DimensionGenerateDialog.vue'
+ import DimensionMigrateDialog from '@/components/DimensionMigrateDialog.vue'
 import { useLibraryStore } from '@/stores/library'
 import { useDimensionPanelStore } from '@/stores/dimensionPanel'
 
@@ -182,8 +183,8 @@ onBeforeUnmount(() => {
   document.removeEventListener('keydown', onDocKeydownForPopover)
   window.removeEventListener('scroll', onScrollOrResizeForPopover, true)
   window.removeEventListener('resize', onScrollOrResizeForPopover)
-})
-// Ctrl+Click 直接切换禁用/启用（替代原右键菜单）
+ })
+ // Ctrl+Click 直接切换禁用/启用（与右键菜单开关项双轨，Ctrl+Click 保留）
 function isCtrlClick(e: MouseEvent): boolean {
   return e.ctrlKey || e.metaKey
 }
@@ -592,6 +593,127 @@ function onGenerateFromMenu(): void {
   showGenerateDialog.value = true
   closeContextMenu()
 }
+ // Need08 — 右键菜单薄包装：只关菜单 + 委托，不写业务（见 docs/need08/03 §4）
+ function onToggleFromMenu(): void {
+   const cur = contextMenu.value
+   if (!cur) return
+   const fresh = library.dimensions.find((d) => d.id === cur.dim.id) ?? cur.dim
+   closeContextMenu()
+   void onToggleDimension(fresh)
+ }
+ function onClearFromMenu(): void {
+   const cur = contextMenu.value
+   if (!cur) return
+   closeContextMenu()
+   openClearConfirm(cur.dim)
+ }
+ function onMigrateFromMenu(): void {
+   const cur = contextMenu.value
+   if (!cur) return
+   closeContextMenu()
+   openMigrateDialog(cur.dim)
+ }
+
+ // —— Need08: 清空维度（确认框 + 快照 + 循环软删 + 已选联动 + 失败回滚，见 04 §3-§4） ——
+ const clearTarget = ref<Dimension | null>(null)
+ const clearConfirmOpen = ref(false)
+ const clearing = ref(false)
+ const clearProgress = ref({ done: 0, total: 0 })
+ const clearAgreed = ref(false)
+ const clearCount = computed(() => (clearTarget.value ? (modulesByDim.value[clearTarget.value.id]?.length ?? 0) : 0))
+ const clearSelectedK = computed(() => {
+   const dim = clearTarget.value
+   if (!dim) return 0
+   const ids = new Set((modulesByDim.value[dim.id] ?? []).map((m) => m.id))
+   return assembly.selectedItems.filter((it) => it.module.dimensionId === dim.id || ids.has(it.module.id)).length
+ })
+ function openClearConfirm(dim: Dimension): void {
+   clearTarget.value = dim
+   clearAgreed.value = false
+   clearProgress.value = { done: 0, total: 0 }
+   clearConfirmOpen.value = true
+ }
+ function closeClearConfirm(): void {
+   if (clearing.value) return
+   clearConfirmOpen.value = false
+ }
+ async function doClearDimension(): Promise<void> {
+   const dim = clearTarget.value
+   if (!dim) return
+   if (clearing.value) { push('正在清空中…', 'info', 1500); return }
+   const grouped = library.modulesByDim as Record<string, Module[]>
+   const groupedKey = (grouped[dim.id] ? dim.id : (grouped[dim.key] ? dim.key : dim.id))
+   const list = [...(modulesByDim.value[dim.id] ?? [])]
+   if (list.length === 0) { clearConfirmOpen.value = false; return }
+   const snapshot = [...list]
+   const total = list.length
+   clearing.value = true
+   clearProgress.value = { done: 0, total }
+   try {
+     for (let i = 0; i < list.length; i++) {
+       const m = list[i]!
+       await dbSoftDeleteModule(m.id)
+       clearProgress.value = { done: i + 1, total }
+       const g = library.modulesByDim as Record<string, Module[]>
+       g[groupedKey] = (g[groupedKey] ?? []).filter((x) => x.id !== m.id)
+       library.modulesByDim = { ...g }
+     }
+   } catch (e) {
+     const g2 = library.modulesByDim as Record<string, Module[]>
+     g2[groupedKey] = snapshot
+     library.modulesByDim = { ...g2 }
+     emit(LIBRARY_CHANGED, { source: 'dimension-panel', op: 'clear-dimension-failed' })
+     await library.fetchAll()
+     push(`清空中断：已删除 ${clearProgress.value.done} 条，剩余已恢复显示，请重试…`, 'error')
+     clearing.value = false
+     return
+   }
+   const ids = new Set(list.map((m) => m.id))
+   const linked = assembly.selectedItems.filter((it) => it.module.dimensionId === dim.id || ids.has(it.module.id))
+   for (const it of linked) assembly.removeModule(it.module.id)
+   emit(LIBRARY_CHANGED, { source: 'dimension-panel', op: 'clear-dimension' })
+   await library.fetchAll()
+   push(`已清空维度「${dim.nameCn}」，删除 ${total} 条` + (linked.length ? `，移出已选 ${linked.length} 条` : ''), 'success', 2200)
+   clearConfirmOpen.value = false
+   clearing.value = false
+ }
+
+ // —— Need08: 迁移维度（归档 + 原位重建，走 Rust 事务命令，见 05 §6） ——
+ const migrateTarget = ref<Dimension | null>(null)
+ const migrateOpen = ref(false)
+ const migrating = ref(false)
+ const migrateCount = computed(() => (migrateTarget.value ? (modulesByDim.value[migrateTarget.value.id]?.length ?? 0) : 0))
+ const migrateSelectedK = computed(() => {
+   const dim = migrateTarget.value
+   if (!dim) return 0
+   const ids = new Set((modulesByDim.value[dim.id] ?? []).map((m) => m.id))
+   return assembly.selectedItems.filter((it) => it.module.dimensionId === dim.id || ids.has(it.module.id)).length
+ })
+ function openMigrateDialog(dim: Dimension): void {
+   if ((modulesByDim.value[dim.id]?.length ?? 0) === 0) return
+   migrateTarget.value = dim
+   migrateOpen.value = true
+ }
+ async function doMigrateDimension(): Promise<void> {
+   const dim = migrateTarget.value
+   if (!dim || migrating.value) return
+   migrating.value = true
+   try {
+     const r = await dbMigrateDimension({ dimensionId: dim.id })
+     for (const it of [...assembly.selectedItems]) {
+       if (it.module.dimensionId === dim.id) assembly.removeModule(it.module.id)
+     }
+     emit(LIBRARY_CHANGED, { source: 'dimension-panel', op: 'migrate-dimension' })
+     await library.fetchAll()
+     panelStore.setExpanded(dim.key, true)
+     push(`已迁移 ${r.moved} 条到归档「${r.archive.key}」，新生空白维度「${dim.nameCn}」可用`, 'success', 2600)
+     migrateOpen.value = false
+   } catch (e) {
+     push(`迁移失败: ${String(e)}`, 'error')
+   } finally {
+     migrating.value = false
+   }
+ }
 async function onCopyDimKey(key: string): Promise<void> {
   try { await navigator.clipboard.writeText(key); push(`已复制维度键名 ${key}`, 'success', 1500) }
   catch { push('复制失败', 'warning') }
@@ -717,7 +839,7 @@ defineExpose({ refresh, keyword, allowNsfw, dimensions, modulesByDim, onCreateDi
               :data-dim-key="dim.key"
               class="flex w-full items-center justify-between px-3 py-2 text-left hover:bg-accent/50"
               :class="!dim.isEnabled ? 'opacity-60' : ''"
-              :title="!dim.isEnabled ? '已禁用，不参与可控随机 — Ctrl+点击可启用' : 'Ctrl+点击可禁用 · 右键更多'"
+               :title="!dim.isEnabled ? '已禁用，不参与可控随机 — Ctrl+点击或右键菜单可启用' : 'Ctrl+点击或右键菜单可启用/禁用'"
               @click="onDimHeaderClick($event, dim)"
               @contextmenu.prevent="onDimContextMenu($event, dim)"
             >
@@ -919,16 +1041,42 @@ defineExpose({ refresh, keyword, allowNsfw, dimensions, modulesByDim, onCreateDi
           :title="(modulesByDim[contextMenu.dim.id]?.length ?? 0) === 0 ? '该维度暂无词条' : '批量翻译本维度中文描述'"
           @click="onTranslateFromMenu"
         >批量翻译（中文描述）</button>
-        <button
-          :data-testid="`dim-ctx-generate-${contextMenu.key}`"
-          role="menuitem"
-          title="按倾向为该维度批量生成新片段"
-          class="flex w-full items-center rounded px-3 py-2 text-left text-sm hover:bg-accent"
-          @click="onGenerateFromMenu"
-        >✨ 片段批量生成</button>
-        <div class="my-1 border-t" />
-        <button :data-testid="`dim-ctx-copy-key-${contextMenu.key}`" role="menuitem" class="flex w-full rounded px-3 py-1.5 text-left text-xs hover:bg-accent" @click="onCopyDimKey(contextMenu.key)">复制维度键名</button>
-        <button :data-testid="`dim-ctx-copy-name-${contextMenu.key}`" role="menuitem" class="flex w-full rounded px-3 py-1.5 text-left text-xs hover:bg-accent" @click="onCopyDimName(contextMenu.dim.nameCn)">复制维度中文名</button>
+         <button
+           :data-testid="`dim-ctx-generate-${contextMenu.key}`"
+           role="menuitem"
+           title="按倾向为该维度批量生成新片段"
+           class="flex w-full items-center rounded px-3 py-2 text-left text-sm hover:bg-accent"
+           @click="onGenerateFromMenu"
+         >片段批量生成</button>
+         <button
+           :data-testid="`dim-ctx-toggle-${contextMenu.key}`"
+           role="menuitem"
+           class="flex w-full items-center rounded px-3 py-2 text-left text-sm hover:bg-accent"
+           :title="contextMenu.dim.isEnabled ? '禁用后不参与可控随机' : '启用后恢复参与可控随机'"
+           @click="onToggleFromMenu"
+         >{{ contextMenu.dim.isEnabled ? '禁用维度' : '启用维度' }}</button>
+         <div class="my-1 border-t" />
+         <button
+           :data-testid="`dim-ctx-clear-${contextMenu.key}`"
+           role="menuitem"
+           class="flex w-full items-center rounded px-3 py-2 text-left text-sm text-destructive hover:bg-accent disabled:opacity-50"
+           :disabled="(modulesByDim[contextMenu.dim.id]?.length ?? 0) === 0"
+           :title="(modulesByDim[contextMenu.dim.id]?.length ?? 0) === 0 ? '该维度暂无词条' : '删除本维度全部片段（不可恢复）'"
+           :aria-label="`清空维度${contextMenu.dim.nameCn}全部${modulesByDim[contextMenu.dim.id]?.length ?? 0}条片段`"
+           @click="onClearFromMenu"
+         >清空维度内容…</button>
+         <button
+           :data-testid="`dim-ctx-migrate-${contextMenu.key}`"
+           role="menuitem"
+           class="flex w-full items-center rounded px-3 py-2 text-left text-sm text-destructive hover:bg-accent disabled:opacity-50"
+           :disabled="(modulesByDim[contextMenu.dim.id]?.length ?? 0) === 0"
+           :title="(modulesByDim[contextMenu.dim.id]?.length ?? 0) === 0 ? '空维度无需迁移' : '归档全部片段并重建空白维度'"
+           :aria-label="`迁移维度${contextMenu.dim.nameCn}全部${modulesByDim[contextMenu.dim.id]?.length ?? 0}条片段`"
+           @click="onMigrateFromMenu"
+         >迁移维度…</button>
+         <div class="my-1 border-t" />
+         <button :data-testid="`dim-ctx-copy-key-${contextMenu.key}`" role="menuitem" class="flex w-full rounded px-3 py-1.5 text-left text-xs hover:bg-accent" @click="onCopyDimKey(contextMenu.key)">复制维度键名</button>
+         <button :data-testid="`dim-ctx-copy-name-${contextMenu.key}`" role="menuitem" class="flex w-full rounded px-3 py-1.5 text-left text-xs hover:bg-accent" @click="onCopyDimName(contextMenu.dim.nameCn)">复制维度中文名</button>
       </div>
     </Teleport>
 
@@ -949,6 +1097,56 @@ defineExpose({ refresh, keyword, allowNsfw, dimensions, modulesByDim, onCreateDi
       @update:open="showGenerateDialog = $event"
       @imported="() => { /* library 已通过事件刷新 */ }"
     />
+ 
+     <!-- Need08: 清空维度确认小 Dialog（内联，复用 ModuleBatchDialog 居中视觉，见 04 §5） -->
+     <div
+       v-if="clearConfirmOpen"
+       data-testid="clear-confirm-dialog"
+       class="fixed inset-0 z-40 flex items-center justify-center bg-black/40 p-4"
+       @click.self="closeClearConfirm"
+     >
+       <div class="flex max-h-[86vh] w-full max-w-md flex-col rounded-lg border bg-background shadow-xl">
+         <div class="flex items-center justify-between border-b px-4 py-3">
+           <h2 class="text-sm font-semibold">清空维度「{{ clearTarget ? `${clearTarget.nameCn} / ${clearTarget.key}` : '—' }}」？</h2>
+         </div>
+         <div class="space-y-2 overflow-y-auto px-4 py-3 text-sm">
+           <p>该维度现有 {{ clearCount }} 条片段，清空后不可恢复。</p>
+           <p v-if="clearSelectedK > 0">其中 {{ clearSelectedK }} 条正在“已选”中，将一并移出已选（拼装 IR 同步更新）。</p>
+           <label class="flex cursor-pointer items-start gap-2 rounded border p-2 text-xs">
+             <input
+               v-model="clearAgreed"
+               data-testid="clear-confirm-check"
+               type="checkbox"
+               class="mt-0.5 h-4 w-4 accent-primary"
+               :disabled="clearing"
+             />
+             <span>我已确认要删除全部 {{ clearCount }} 条</span>
+           </label>
+         </div>
+         <div class="flex justify-end gap-2 border-t px-4 py-3">
+           <Button size="sm" variant="outline" class="h-8 text-xs" data-testid="clear-confirm-cancel" :disabled="clearing" @click="closeClearConfirm">取消</Button>
+           <Button
+             size="sm"
+             variant="destructive"
+             class="h-8 text-xs"
+             data-testid="clear-confirm-btn"
+             :disabled="!clearAgreed || clearing"
+             @click="doClearDimension"
+           >{{ clearing ? `清空中… ${clearProgress.done}/${clearProgress.total}` : `确认清空（${clearCount} 条）` }}</Button>
+         </div>
+       </div>
+     </div>
+ 
+     <!-- Need08: 迁移维度确认对话框（见 05 §4） -->
+     <DimensionMigrateDialog
+       :open="migrateOpen"
+       :dimension="migrateTarget"
+       :count="migrateCount"
+       :selected-count="migrateSelectedK"
+       :busy="migrating"
+       @update:open="migrateOpen = $event"
+       @confirm="doMigrateDimension"
+     />
 
     <!-- need05: 权重浮窗 Teleport 到 body 的 fixed 层 -->
     <Teleport to="body">

@@ -1,4 +1,27 @@
 # Changelog
+## need08 — 2026-09-23 · 维度右键菜单增强（去Emoji/开关/清空/迁移）
+
+### 菜单重构（DimensionPanel + need05Position）
+
+- **7项两线**：翻译/生成/开关/清空/迁移/复制键名/复制中文名，顺序与docs/need08/02 §1一致；生成项去 ✨（精确文本`片段批量生成`，testid不变）；清空/迁移空维度disabled+title说明，危险项`text-destructive`。
+- **定位**：`MENU_W 180→208`、`MENU_H_EST 110→220`，视口右下角翻转不溢出；薄包装`onToggleFromMenu/onClearFromMenu/onMigrateFromMenu`（关菜单再委托）；维度头title改为`Ctrl+点击或右键菜单可启用/禁用`。
+
+### 开关/清空/迁移
+
+- **开关**：复用`onToggleDimension`（fresh兜底+乐观更新+`enable/disable-dimension`事件），与Ctrl+Click双轨。
+- **清空**：内联确认小Dialog（N/K+checkbox门控+`清空中… i/N`进度）→逐条`dbSoftDeleteModule`→`assembly.removeModule`联动→`clear-dimension`事件+`fetchAll`强刷；中途失败快照回显+`clear-dimension-failed`+`fetchAll`对齐，toast如实报`已删除 i 条`。
+- **迁移**：新建`DimensionMigrateDialog`（归档`_bak_`预览+N/K+规则Tips+checkbox门控）；`dbMigrateDimension`→联动移出已选→`migrate-dimension`+`fetchAll`+`setExpanded(原key,true)`。
+
+### 后端事务（db.rs + lib.rs注册）
+
+- **新增`db_migrate_dimension`**：读源→计数（0则`空维度无需迁移`）→服务端`rand6`防重循环（≤10次，`{key}_bak_{6位}`，31字符集剔除易混淆）→`BEGIN IMMEDIATE`内改名归档（沉底`MAX+1`、`nameCn+（归档）`）+原key原位重建→`COMMIT/ROLLBACK`；模块行零搬运。错误口径：不存在→`维度 '{id}' 不存在或已删除`、10次全撞→`归档键名冲突，请重试`。
+- **单测7例**：`migrate_happy_path/empty_rejected/missing_dimension_rejected/key_collision_retry/second_round_key_differs/rollback/rand6_format_and_archive_name`。
+
+### 测试验收
+
+- **前端**：新增`DimensionCtxToggle/CtxClear/Migrate`三文件12用例（顺序/文案/开关翻转/清空N次调用+联动+失败保持打开/迁移预览+一次调用+失败保持打开）；存量`DimensionGenerate/Translate/disable/need05Position`同步，全量57文件456用例通过，`vue-tsc --noEmit`零错误。
+- **后端**：`cargo test` 116通过（含迁移7例）。
+
 
 ## need07 — 2026-09-23 · Windows 路径治理 + 存量无感迁移（方案B）
 
