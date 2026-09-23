@@ -1,4 +1,5 @@
-use rusqlite::{params, Connection};
+ use rusqlite::{params, Connection};
+ use std::sync::atomic::{AtomicU64, Ordering};
 use serde::{Deserialize, Serialize};
 use tauri::AppHandle;
 
@@ -525,6 +526,240 @@ pub fn db_soft_delete_dimension(app: AppHandle, id: String) -> Result<(), String
     }
     Ok(())
 }
+ // ------------------------------------------------------------------
+ // Need08 — 维度迁移：老维度改名归档（key+随机后缀、沉底）+ 原 key 原位重建空白维度
+ // 模块行零搬运；全程单事务，失败 ROLLBACK。详见 docs/need08/05_维度迁移设计.md
+ // ------------------------------------------------------------------
+ static MIGRATE_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+ /// 6 位随机后缀字符集：小写字母+数字，剔除 0/o/1/l/i 易混淆字符（26-3+10-2=31 个）。
+ const MIGRATE_SUFFIX_CHARSET: &[u8] = b"abcdefghjkmnpqrstuvwxyz23456789";
+
+ fn rand6() -> String {
+     let c = MIGRATE_COUNTER.fetch_add(1, Ordering::SeqCst);
+     let nanos = std::time::SystemTime::now()
+         .duration_since(std::time::UNIX_EPOCH)
+         .map(|d| d.subsec_nanos() as u64)
+         .unwrap_or(0);
+     let mut x: u64 = (now_ts() as u64)
+         .wrapping_mul(40503)
+         .wrapping_add(nanos)
+         .wrapping_add(c.wrapping_mul(2654435761));
+     // xorshift+ 分散，保证同一纳秒内连续调用也充分分散
+     x ^= x >> 16;
+     x = x.wrapping_mul(0x7feb352d);
+     x ^= x >> 15;
+     x = x.wrapping_mul(0x846ca68b);
+     x ^= x >> 16;
+     let mut s = String::with_capacity(6);
+     let mut v = x;
+     for _ in 0..6 {
+         v = v
+             .wrapping_mul(6364136223846793005)
+             .wrapping_add(1442695040888963407);
+         v ^= v >> 29;
+         s.push(MIGRATE_SUFFIX_CHARSET[(v % MIGRATE_SUFFIX_CHARSET.len() as u64) as usize] as char);
+     }
+     s
+ }
+
+ fn archive_display_name(name_cn: &str, ts: i64) -> String {
+     const TAG: &str = "（归档）";
+     if name_cn.ends_with(TAG) {
+         let date = chrono::DateTime::<chrono::Utc>::from_timestamp(ts, 0)
+             .map(|d| d.format("%Y-%m-%d").to_string())
+             .unwrap_or_default();
+         let base = name_cn.trim_end_matches(TAG);
+         format!("{}（归档{}）", base, date)
+     } else if name_cn.contains("（归档") {
+         let date = chrono::DateTime::<chrono::Utc>::from_timestamp(ts, 0)
+             .map(|d| d.format("%Y-%m-%d").to_string())
+             .unwrap_or_default();
+         format!("{}（归档{}）", name_cn, date)
+     } else {
+         format!("{}{}", name_cn, TAG)
+     }
+ }
+
+ #[derive(Debug, Serialize, Deserialize, Clone)]
+ #[serde(rename_all = "camelCase")]
+ pub struct MigrateReport {
+     pub archive: DimensionDto,
+     pub fresh: DimensionDto,
+     pub moved: i64,
+ }
+
+ struct MigrateSrc {
+     id: String,
+     key: String,
+     name_cn: String,
+     name_en: Option<String>,
+     sort_order: i64,
+     is_multi_select: bool,
+     is_enabled: bool,
+     icon: Option<String>,
+ }
+
+ fn read_migrate_src(conn: &Connection, dimension_id: &str) -> Result<MigrateSrc, String> {
+     conn.query_row(
+         "SELECT id, key, name_cn, name_en, sort_order, is_multi_select, is_enabled, icon FROM dimensions WHERE id = ?1 AND is_deleted = 0",
+         params![dimension_id],
+         |r| {
+             Ok(MigrateSrc {
+                 id: r.get(0)?,
+                 key: r.get(1)?,
+                 name_cn: r.get(2)?,
+                 name_en: r.get(3)?,
+                 sort_order: r.get(4)?,
+                 is_multi_select: r.get::<_, i64>(5)? != 0,
+                 is_enabled: r.get::<_, i64>(6)? != 0,
+                 icon: r.get(7)?,
+             })
+         },
+     )
+     .map_err(|e| e.to_string())
+     .and_then(|src| {
+         if src.id.is_empty() {
+             Err(format!("维度 '{}' 不存在或已删除", dimension_id))
+         } else {
+             Ok(src)
+         }
+     })
+     .or_else(|e| {
+         // query_row 在无行时返回 QueryReturnedNoRows，把它翻译成人话
+         if e.contains("no rows") || e.contains("RowNotFound") {
+             Err(format!("维度 '{}' 不存在或已删除", dimension_id))
+         } else {
+             Err(e)
+         }
+     })
+ }
+
+ fn read_dimension_dto(conn: &Connection, id: &str) -> Result<DimensionDto, String> {
+     conn.query_row(
+         "SELECT id, key, name_cn, name_en, sort_order, is_multi_select, is_enabled, icon, created_at, updated_at FROM dimensions WHERE id = ?1",
+         params![id],
+         |r| {
+             Ok(DimensionDto {
+                 id: r.get(0)?,
+                 key: r.get(1)?,
+                 name_cn: r.get(2)?,
+                 name_en: r.get(3)?,
+                 sort_order: r.get(4)?,
+                 is_multi_select: r.get::<_, i64>(5)? != 0,
+                 is_enabled: r.get::<_, i64>(6)? != 0,
+                 icon: r.get(7)?,
+                 created_at: r.get(8)?,
+                 updated_at: r.get(9)?,
+             })
+         },
+     )
+     .map_err(|e| e.to_string())
+ }
+
+ /// 事务体：改名归档（沉底）+ 原位重建。调用方负责生成 archive_key；
+ /// fresh_id 由调用方传入，便于单测注入冲突 id 验证回滚。
+ fn exec_migrate_tx(
+     conn: &Connection,
+     src: &MigrateSrc,
+     archive_key: &str,
+     fresh_id: &str,
+ ) -> Result<(DimensionDto, DimensionDto), String> {
+     conn.execute("BEGIN IMMEDIATE", [])
+         .map_err(|e| e.to_string())?;
+     let work: Result<(DimensionDto, DimensionDto), String> = (|| {
+         let ts = now_ts();
+         let bottom = next_sort_order(conn)?;
+         let archive_name = archive_display_name(&src.name_cn, ts);
+         conn.execute(
+             "UPDATE dimensions SET key = ?1, name_cn = ?2, sort_order = ?3, updated_at = ?4 WHERE id = ?5",
+             params![archive_key, archive_name, bottom, ts, src.id],
+         )
+         .map_err(|e| e.to_string())?;
+         conn.execute(
+             "INSERT INTO dimensions (id, key, name_cn, name_en, sort_order, is_multi_select, is_enabled, icon, created_at, updated_at, is_deleted) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, 0)",
+             params![
+                 fresh_id,
+                 src.key,
+                 src.name_cn,
+                 src.name_en,
+                 src.sort_order,
+                 if src.is_multi_select { 1 } else { 0 },
+                 if src.is_enabled { 1 } else { 0 },
+                 src.icon,
+                 ts,
+                 ts,
+             ],
+         )
+         .map_err(|e| e.to_string())?;
+         let archive = read_dimension_dto(conn, &src.id)?;
+         let fresh = read_dimension_dto(conn, fresh_id)?;
+         Ok((archive, fresh))
+     })();
+     match work {
+         Ok(v) => {
+             conn.execute("COMMIT", []).map_err(|e| e.to_string())?;
+             Ok(v)
+         }
+         Err(e) => {
+             let _ = conn.execute("ROLLBACK", []);
+             Err(e)
+         }
+     }
+ }
+
+ /// 供 Tauri 命令与单测共用的迁移主流程（打开连接之后的部分）。
+ fn migrate_dimension_on_conn(
+     conn: &Connection,
+     dimension_id: &str,
+ ) -> Result<MigrateReport, String> {
+     let src = read_migrate_src(conn, dimension_id)?;
+     let moved: i64 = conn
+         .query_row(
+             "SELECT COUNT(*) FROM modules WHERE dimension_id = ?1 AND is_deleted = 0",
+             params![src.id],
+             |r| r.get(0),
+         )
+         .map_err(|e| e.to_string())?;
+     if moved == 0 {
+         return Err("空维度无需迁移".to_string());
+     }
+     // 防重循环：服务端生成 archiveKey，上限 10 次
+     let mut archive_key = String::new();
+     for _ in 0..10 {
+         let cand = format!("{}_bak_{}", src.key, rand6());
+         let cnt: i64 = conn
+             .query_row(
+                 "SELECT COUNT(*) FROM dimensions WHERE key = ?1 AND is_deleted = 0",
+                 params![cand],
+                 |r| r.get(0),
+             )
+             .map_err(|e| e.to_string())?;
+         if cnt == 0 {
+             archive_key = cand;
+             break;
+         }
+     }
+     if archive_key.is_empty() {
+         return Err("归档键名冲突，请重试".to_string());
+     }
+     let fresh_id = new_id();
+     let (archive, fresh) = exec_migrate_tx(conn, &src, &archive_key, &fresh_id)?;
+     Ok(MigrateReport {
+         archive,
+         fresh,
+         moved,
+     })
+ }
+
+ #[tauri::command]
+ pub fn db_migrate_dimension(
+     app: AppHandle,
+     dimension_id: String,
+ ) -> Result<MigrateReport, String> {
+     let conn = open_conn(&app)?;
+     migrate_dimension_on_conn(&conn, &dimension_id)
+ }
 
 // ------------------------------------------------------------------
 // Assemblies
@@ -2541,5 +2776,195 @@ mod tests {
         assert_eq!(so, 7);
         drop(conn);
         let _ = std::fs::remove_dir_all(&dir);
-    }
-}
+     }
+
+     // ---- need08: 维度迁移 ----
+     fn seed_migrate_src(conn: &Connection, dim_id: &str, key: &str, n_mods: i64) {
+         let ts = t();
+         conn.execute(
+             "INSERT INTO dimensions (id, key, name_cn, name_en, sort_order, is_multi_select, is_enabled, icon, created_at, updated_at, is_deleted) VALUES (?1,?2,'姿态','Pose',3,0,1,NULL,?3,?3,0)",
+             params![dim_id, key, ts],
+         )
+         .unwrap();
+         for i in 0..n_mods {
+             conn.execute(
+                 "INSERT INTO modules (id, dimension_id, content_en, display_name, weight, is_enabled, is_nsfw, usage_count, created_at, updated_at, is_deleted) VALUES (?1,?2,?3,?4,1.0,1,0,0,?5,?5,0)",
+                 params![
+                     format!("{}_m{}", dim_id, i),
+                     dim_id,
+                     format!("pose content {}", i),
+                     format!("片段{}", i),
+                     ts,
+                 ],
+             )
+             .unwrap();
+         }
+     }
+
+     #[test]
+     fn migrate_happy_path() {
+         let (conn, dir) = temp_db("migrate_ok");
+         seed_migrate_src(&conn, "d_pose", "pose", 3);
+         let r = migrate_dimension_on_conn(&conn, "d_pose").unwrap();
+         assert_eq!(r.moved, 3);
+         assert!(r.archive.key.starts_with("pose_bak_"), "归档 key 应为 原key_bak_6位，实际 {}", r.archive.key);
+         assert_eq!(r.archive.key.len(), "pose_bak_".len() + 6);
+         assert_eq!(r.fresh.key, "pose");
+         assert_eq!(r.fresh.name_cn, "姿态");
+         assert_eq!(r.fresh.sort_order, 3);
+         assert!(r.archive.name_cn.contains("（归档）"));
+         assert_ne!(r.archive.id, r.fresh.id);
+         // 归档承接全部 3 条（内容逐条一致），新生 0 条
+         let n_arch: i64 = conn
+             .query_row(
+                 "SELECT COUNT(*) FROM modules WHERE dimension_id=?1 AND is_deleted=0",
+                 params![r.archive.id],
+                 |r| r.get(0),
+             )
+             .unwrap();
+         assert_eq!(n_arch, 3);
+         let n_fresh: i64 = conn
+             .query_row(
+                 "SELECT COUNT(*) FROM modules WHERE dimension_id=?1 AND is_deleted=0",
+                 params![r.fresh.id],
+                 |r| r.get(0),
+             )
+             .unwrap();
+         assert_eq!(n_fresh, 0);
+         let texts: Vec<String> = {
+             let mut stmt = conn
+                 .prepare("SELECT content_en FROM modules WHERE dimension_id=?1 AND is_deleted=0 ORDER BY content_en")
+                 .unwrap();
+             stmt.query_map(params![r.archive.id], |r| r.get(0))
+                 .unwrap()
+                 .map(|r| r.unwrap())
+                 .collect()
+         };
+         // 原 key 可查到新生行；归档沉底（sort_order 最大）
+         let fresh_id: String = conn
+             .query_row(
+                 "SELECT id FROM dimensions WHERE key='pose' AND is_deleted=0",
+                 [],
+                 |r| r.get(0),
+             )
+             .unwrap();
+         assert_eq!(fresh_id, r.fresh.id);
+         assert!(r.archive.sort_order > r.fresh.sort_order);
+         drop(conn);
+         let _ = std::fs::remove_dir_all(&dir);
+     }
+
+     #[test]
+     fn migrate_empty_rejected() {
+         let (conn, dir) = temp_db("migrate_empty");
+         seed_migrate_src(&conn, "d_empty", "empty_dim", 0);
+         let err = migrate_dimension_on_conn(&conn, "d_empty").unwrap_err();
+         assert_eq!(err, "空维度无需迁移");
+         // 失败后原 key 未变且无新生行
+         let key: String = conn
+             .query_row("SELECT key FROM dimensions WHERE id='d_empty'", [], |r| r.get(0))
+             .unwrap();
+         assert_eq!(key, "empty_dim");
+         let n: i64 = conn
+             .query_row("SELECT COUNT(*) FROM dimensions WHERE is_deleted=0", [], |r| r.get(0))
+             .unwrap();
+         assert_eq!(n, 1);
+         drop(conn);
+         let _ = std::fs::remove_dir_all(&dir);
+     }
+
+     #[test]
+     fn migrate_missing_dimension_rejected() {
+         let (conn, dir) = temp_db("migrate_missing");
+         seed_migrate_src(&conn, "d_pose", "pose", 1);
+         let err = migrate_dimension_on_conn(&conn, "d_nope").unwrap_err();
+         assert!(err.contains("不存在或已删除"), "意外文案: {}", err);
+         drop(conn);
+         let _ = std::fs::remove_dir_all(&dir);
+     }
+
+     #[test]
+     fn migrate_key_collision_retry() {
+         // 预置一个 _bak_ 占位 key：迁移仍成功且归档 key 与占位不同
+         let (conn, dir) = temp_db("migrate_collide");
+         seed_migrate_src(&conn, "d_pose", "pose", 2);
+         let ts = t();
+         conn.execute(
+             "INSERT INTO dimensions (id, key, name_cn, sort_order, is_multi_select, is_enabled, created_at, updated_at, is_deleted) VALUES ('d_squat','pose_bak_squat1','占位',99,0,1,?1,?1,0)",
+             params![ts],
+         )
+         .unwrap();
+         let r = migrate_dimension_on_conn(&conn, "d_pose").unwrap();
+         assert_eq!(r.moved, 2);
+         assert_ne!(r.archive.key, "pose_bak_squat1");
+         assert!(r.archive.key.starts_with("pose_bak_"));
+         drop(conn);
+         let _ = std::fs::remove_dir_all(&dir);
+     }
+
+     #[test]
+     fn migrate_second_round_key_differs() {
+         // 新生维度写入 1 条后再次迁移：两次归档 key 不同（防重生效）
+         let (conn, dir) = temp_db("migrate_twice");
+         seed_migrate_src(&conn, "d_pose", "pose", 2);
+         let r1 = migrate_dimension_on_conn(&conn, "d_pose").unwrap();
+         let ts = t();
+         // 直接挂到新生维度上（模拟用户迁移后生成/导入；dimension_id 有 FK 约束）
+         conn.execute(
+             "INSERT INTO modules (id, dimension_id, content_en, display_name, weight, is_enabled, is_nsfw, usage_count, created_at, updated_at, is_deleted) VALUES ('m_new',?1,'fresh content','新片段',1.0,1,0,0,?2,?2,0)",
+             params![r1.fresh.id, ts],
+         )
+         .unwrap();
+         let r2 = migrate_dimension_on_conn(&conn, &r1.fresh.id).unwrap();
+         assert_eq!(r2.moved, 1);
+         assert_ne!(r1.archive.key, r2.archive.key);
+         assert_eq!(r2.fresh.key, "pose");
+         drop(conn);
+         let _ = std::fs::remove_dir_all(&dir);
+     }
+
+     #[test]
+     fn migrate_rollback() {
+         // 事务内 INSERT 用冲突主键强制失败：原维度 key 未变、无新生行
+         let (conn, dir) = temp_db("migrate_rollback");
+         seed_migrate_src(&conn, "d_pose", "pose", 2);
+         let src = read_migrate_src(&conn, "d_pose").unwrap();
+         // fresh_id 与源维度 id 相同 → INSERT 违反 PRIMARY KEY，触发 ROLLBACK
+         let err = exec_migrate_tx(&conn, &src, "pose_bak_deadbe", "d_pose").unwrap_err();
+         assert!(!err.is_empty());
+         let key: String = conn
+             .query_row("SELECT key FROM dimensions WHERE id='d_pose'", [], |r| r.get(0))
+             .unwrap();
+         assert_eq!(key, "pose");
+         let n: i64 = conn
+             .query_row("SELECT COUNT(*) FROM dimensions WHERE is_deleted=0", [], |r| r.get(0))
+             .unwrap();
+         assert_eq!(n, 1);
+         let n_mods: i64 = conn
+             .query_row(
+                 "SELECT COUNT(*) FROM modules WHERE dimension_id='d_pose' AND is_deleted=0",
+                 [],
+                 |r| r.get(0),
+             )
+             .unwrap();
+         assert_eq!(n_mods, 2);
+         drop(conn);
+         let _ = std::fs::remove_dir_all(&dir);
+     }
+
+     #[test]
+     fn migrate_rand6_format_and_archive_name() {
+         use std::collections::HashSet;
+         let mut set = HashSet::new();
+         for _ in 0..1000 {
+             let s = rand6();
+             assert_eq!(s.len(), 6);
+             assert!(s.bytes().all(|b| MIGRATE_SUFFIX_CHARSET.contains(&b)), "非法字符: {}", s);
+             set.insert(s);
+         }
+         // 1000 次无重复格式（碰撞概率可忽略；若偶发失败可重跑）
+         assert!(set.len() >= 990, "随机分散不足: {}", set.len());
+         assert_eq!(archive_display_name("姿态", 1700000000), "姿态（归档）");
+         assert!(archive_display_name("姿态（归档）", 1700000000).starts_with("姿态（归档"));
+     }
+ }

@@ -234,6 +234,21 @@ export async function dbUpdateDimension(d: Dimension): Promise<void> {
 export async function dbSoftDeleteDimension(id: string): Promise<void> {
   await invoke('db_soft_delete_dimension', { id })
 }
+// ------------------------------------------------------------------
+// Need08 — 维度迁移（归档 + 原位重建）
+// ------------------------------------------------------------------
+export type MigrateDimensionReport = {
+  archive: Dimension
+  fresh: Dimension
+  moved: number
+}
+
+export async function dbMigrateDimension(args: { dimensionId: string }): Promise<MigrateDimensionReport> {
+  const r = await invoke<{ archive: DimensionDto; fresh: DimensionDto; moved: number }>('db_migrate_dimension', {
+    dimensionId: args.dimensionId,
+  })
+  return { archive: toDimension(r.archive), fresh: toDimension(r.fresh), moved: r.moved }
+}
 
 // ------------------------------------------------------------------
 // Assemblies

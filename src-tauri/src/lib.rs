@@ -64,6 +64,7 @@ pub fn run() {
             commands::db::db_create_dimension,
             commands::db::db_update_dimension,
             commands::db::db_soft_delete_dimension,
+            commands::db::db_migrate_dimension,
             commands::db::db_save_assembly,
             commands::db::db_save_assembly_from_ir,
             commands::db::db_list_recent,
