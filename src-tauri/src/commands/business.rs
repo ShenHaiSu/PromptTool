@@ -10,18 +10,10 @@ use super::meta::{mark_registry_missing, refresh_registry_counts, AppState};
 // Path helpers
 // ------------------------------------------------------------------
 
+#[allow(dead_code)]
 fn lexical_normalize(p: &Path) -> PathBuf {
-    let mut out = PathBuf::new();
-    for comp in p.components() {
-        match comp {
-            std::path::Component::ParentDir => {
-                out.pop();
-            }
-            std::path::Component::CurDir => {}
-            c => out.push(c.as_os_str()),
-        }
-    }
-    out
+    // need07 T13: 收敛为中枢调用，留一行转发避免行为漂移
+    super::path_resolve::lexical_normalize(p)
 }
 
 pub fn normalize_business_path(input: &str, app: &AppHandle) -> Result<PathBuf, String> {
@@ -47,36 +39,17 @@ pub fn normalize_business_path(input: &str, app: &AppHandle) -> Result<PathBuf, 
     if raw_adjusted.as_os_str().is_empty() {
         return Err("业务库路径不能为空".to_string());
     }
+    // need07: 相对拼 active data_dir（回退兼容 data_dir_for）；绝对先脱壳防直传 \\?\
+    let base = super::path_resolve::resolve_data_dir(app)
+        .map(|r| PathBuf::from(r.active))
+        .unwrap_or(super::migration::data_dir_for(app)?);
     let abs = if raw_adjusted.is_absolute() {
-        raw_adjusted
+        super::path_resolve::strip_verbatim(&raw_adjusted)
     } else {
-        super::migration::data_dir_for(app)?.join(raw_adjusted)
+        base.join(raw_adjusted)
     };
-    let normalized = if abs.exists() {
-        abs.canonicalize()
-            .map_err(|e| format!("无法规范化路径 '{}': {}", abs.display(), e))?
-    } else {
-        // Prefer parent canonicalization to get real casing on Windows, fallback to lexical
-        if let Some(parent) = abs.parent() {
-            if parent.exists() {
-                if let Ok(canon_parent) = parent.canonicalize() {
-                    if let Some(file) = abs.file_name() {
-                        let mut out = canon_parent;
-                        out.push(file);
-                        lexical_normalize(&out)
-                    } else {
-                        lexical_normalize(&abs)
-                    }
-                } else {
-                    lexical_normalize(&abs)
-                }
-            } else {
-                lexical_normalize(&abs)
-            }
-        } else {
-            lexical_normalize(&abs)
-        }
-    };
+    // need07: 存在→canonical+脱壳；缺失→父canonical+脱壳；永不返回 \\?\ 前缀
+    let normalized = super::path_resolve::canonical_stripped(&abs)?;
     let ext_ok = normalized
         .extension()
         .and_then(|s| s.to_str())
@@ -390,15 +363,15 @@ pub fn db_create_business(
         let max = *state.max_active.lock().map_err(|e| e.to_string())?;
         let mut resident = state.resident.lock().map_err(|e| e.to_string())?;
         if let Some(old) = old_fg {
-            if old.to_string_lossy().to_ascii_lowercase() != normalized.to_string_lossy().to_ascii_lowercase() {
-                resident.retain(|p| p.to_string_lossy().to_ascii_lowercase() != old.to_string_lossy().to_ascii_lowercase());
+           if super::path_resolve::norm_key(&old) != super::path_resolve::norm_key(&normalized) {
+               resident.retain(|p| super::path_resolve::norm_key(p) != super::path_resolve::norm_key(&old));
                 resident.push_front(old);
             }
         }
         // dedup resident by lower
         {
             let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
-            resident.retain(|p| seen.insert(p.to_string_lossy().to_ascii_lowercase()));
+           resident.retain(|p| seen.insert(super::path_resolve::norm_key(p)));
         }
         while resident.len() > max.saturating_sub(1) {
             resident.pop_back();
@@ -495,14 +468,14 @@ pub fn db_switch_active(app: AppHandle, path: String) -> Result<SwitchResult, St
         let max = *state.max_active.lock().map_err(|e| e.to_string())?;
         let mut resident = state.resident.lock().map_err(|e| e.to_string())?;
         if let Some(old) = old_fg {
-            if old.to_string_lossy().to_ascii_lowercase() != normalized.to_string_lossy().to_ascii_lowercase() {
-                resident.retain(|p| p.to_string_lossy().to_ascii_lowercase() != old.to_string_lossy().to_ascii_lowercase());
+           if super::path_resolve::norm_key(&old) != super::path_resolve::norm_key(&normalized) {
+               resident.retain(|p| super::path_resolve::norm_key(p) != super::path_resolve::norm_key(&old));
                 resident.push_front(old);
             }
         }
         {
             let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
-            resident.retain(|p| seen.insert(p.to_string_lossy().to_ascii_lowercase()));
+           resident.retain(|p| seen.insert(super::path_resolve::norm_key(p)));
         }
         while resident.len() > max.saturating_sub(1) {
             resident.pop_back();
@@ -549,7 +522,7 @@ pub fn db_repair_path(
     let fg: Option<String> = mconn
         .query_row("SELECT v FROM app_settings WHERE k='foreground_path'", [], |r| r.get(0))
         .ok();
-    if fg.as_deref().map(|s| s.to_ascii_lowercase()) == Some(old_norm.to_string_lossy().to_ascii_lowercase()) {
+   if fg.as_deref().map(|s| super::path_resolve::norm_key(std::path::Path::new(s))) == Some(super::path_resolve::norm_key(&old_norm)) {
         mconn
             .execute(
                 "INSERT OR REPLACE INTO app_settings(k,v) VALUES ('foreground_path', ?1)",
@@ -557,7 +530,7 @@ pub fn db_repair_path(
             )
             .map_err(|e| e.to_string())?;
         *state.foreground.lock().map_err(|e| e.to_string())? = Some(new_norm.clone());
-    } else if fg.as_deref().map(|s| s.to_ascii_lowercase()) == Some(new_norm.to_string_lossy().to_ascii_lowercase()) {
+   } else if fg.as_deref().map(|s| super::path_resolve::norm_key(std::path::Path::new(s))) == Some(super::path_resolve::norm_key(&new_norm)) {
         // already foreground, keep
     }
     drop(mconn);
@@ -648,7 +621,7 @@ pub fn db_remove_registry(app: AppHandle, path: String) -> Result<RemoveResult, 
     let fg: Option<String> = mconn
         .query_row("SELECT v FROM app_settings WHERE k='foreground_path'", [], |r| r.get(0))
         .ok();
-    let was_foreground = fg.as_deref().map(|s| s.to_ascii_lowercase()) == Some(normalized.to_string_lossy().to_ascii_lowercase());
+   let was_foreground = fg.as_deref().map(|s| super::path_resolve::norm_key(std::path::Path::new(s))) == Some(super::path_resolve::norm_key(&normalized));
     let next_foreground: Option<String> = if was_foreground {
         let mut stmt = mconn
             .prepare("SELECT path FROM db_registry WHERE status='available' COLLATE NOCASE ORDER BY last_opened_at DESC LIMIT 1")
@@ -672,14 +645,14 @@ pub fn db_remove_registry(app: AppHandle, path: String) -> Result<RemoveResult, 
             .resident
             .lock()
             .map_err(|e| e.to_string())?
-            .retain(|p| p.to_string_lossy().to_ascii_lowercase() != normalized.to_string_lossy().to_ascii_lowercase());
+           .retain(|p| super::path_resolve::norm_key(p) != super::path_resolve::norm_key(&normalized));
         next
     } else {
         state
             .resident
             .lock()
             .map_err(|e| e.to_string())?
-            .retain(|p| p.to_string_lossy().to_ascii_lowercase() != normalized.to_string_lossy().to_ascii_lowercase());
+           .retain(|p| super::path_resolve::norm_key(p) != super::path_resolve::norm_key(&normalized));
         None
     };
     Ok(RemoveResult {

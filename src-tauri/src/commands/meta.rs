@@ -57,6 +57,180 @@ pub fn init_default_db(path: &Path) -> Result<(), String> {
     .map_err(|e| e.to_string())?;
     Ok(())
 }
+// ------------------------------------------------------------------
+// need07: path_schema v2 无感迁移（只洗字符串，不搬文件）
+// ------------------------------------------------------------------
+
+/// 注册表路径洗白 v1→v2：脱壳 `\\?\`、盘符大写、按 `norm_key` 去重、补前台。
+/// 返回 `(washed, deduped)`；幂等（已 v2 直接 `Ok((0,0))`）。
+/// 全程单事务，失败 `ROLLBACK` + 保留 `.bak`，调用方记日志继续启动（不断服）。
+pub fn migrate_path_schema_v2(default_db: &Path) -> Result<(i64, i64), String> {
+    use super::path_resolve::{canonical_stripped, display_path, norm_key, strip_verbatim};
+    let conn = Connection::open(default_db).map_err(|e| e.to_string())?;
+    let version: Option<String> = conn
+        .query_row(
+            "SELECT v FROM app_settings WHERE k='path_schema_version'",
+            [],
+            |r| r.get(0),
+        )
+        .ok();
+    if version.as_deref() == Some("2") {
+        return Ok((0, 0));
+    }
+    // 1. 备份（失败则中止迁移、原库照常启动）
+    let ts = chrono::Utc::now().timestamp();
+    let bak = PathBuf::from(format!("{}.bak-{}", default_db.display(), ts));
+    let _ = conn.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);");
+    std::fs::copy(default_db, &bak)
+        .map_err(|e| format!("迁移备份失败 '{}': {}", bak.display(), e))?;
+    // 2. 事务内逐行 wash
+    conn.execute("BEGIN IMMEDIATE", []).map_err(|e| e.to_string())?;
+    let work: Result<(i64, i64), String> = (|| {
+        let mut stmt = conn
+            .prepare("SELECT id, path, last_opened_at, dim_count, module_count, favorite_count FROM db_registry")
+            .map_err(|e| e.to_string())?;
+        let rows: Vec<(String, String, Option<i64>, i64, i64, i64)> = stmt
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?)))
+            .map_err(|e| e.to_string())?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| e.to_string())?;
+        drop(stmt);
+        // wash：存在则 canonical+脱壳，不存在则词法脱壳；盘符大写
+        let wash = |raw: &str| -> String {
+            let p = PathBuf::from(raw.trim());
+            match canonical_stripped(&p) {
+                Ok(v) => display_path(&v),
+                Err(_) => display_path(&strip_verbatim(&p)),
+            }
+        };
+        // 按 norm_key 分组
+        let mut groups: std::collections::HashMap<String, Vec<(String, String, Option<i64>, i64, i64, i64)>> =
+            std::collections::HashMap::new();
+        for r in &rows {
+            let washed = wash(&r.1);
+            groups.entry(norm_key(Path::new(&washed))).or_default().push((
+                r.0.clone(),
+                washed,
+                r.2,
+                r.3,
+                r.4,
+                r.5,
+            ));
+        }
+        let mut washed: i64 = 0;
+        let mut deduped: i64 = 0;
+        for members in groups.values() {
+            if members.len() > 1 {
+                // 保留 last_opened_at 最大者（无则 id 最小者），计数取最大者
+                let mut sorted = members.clone();
+                sorted.sort_by(|a, b| b.2.unwrap_or(-1).cmp(&a.2.unwrap_or(-1)).then(a.0.cmp(&b.0)));
+                let keep = &sorted[0];
+                let (max_dim, max_mod, max_fav) = sorted.iter().fold((0i64, 0i64, 0i64), |acc, m| {
+                    (acc.0.max(m.3), acc.1.max(m.4), acc.2.max(m.5))
+                });
+                conn.execute(
+                    "UPDATE db_registry SET path=?1, dim_count=?2, module_count=?3, favorite_count=?4 WHERE id=?5",
+                    rusqlite::params![keep.1, max_dim, max_mod, max_fav, keep.0],
+                )
+                .map_err(|e| e.to_string())?;
+                washed += 1;
+                for m in sorted.iter().skip(1) {
+                    conn.execute("DELETE FROM db_registry WHERE id=?1", rusqlite::params![m.0])
+                        .map_err(|e| e.to_string())?;
+                    deduped += 1;
+                }
+            } else {
+                let m = &members[0];
+                let orig = rows.iter().find(|r| r.0 == m.0).map(|r| r.1.clone()).unwrap_or_default();
+                if m.1 != orig {
+                    conn.execute("UPDATE db_registry SET path=?1 WHERE id=?2", rusqlite::params![m.1, m.0])
+                        .map_err(|e| e.to_string())?;
+                    washed += 1;
+                }
+            }
+        }
+        // 前台 wash；无对应行且文件存在 → 自动补注册；不存在 → 保留不清空
+        let fg: Option<String> = conn
+            .query_row("SELECT v FROM app_settings WHERE k='foreground_path'", [], |r| r.get(0))
+            .ok();
+        if let Some(f) = fg {
+            let wf = wash(&f);
+            if wf != f {
+                conn.execute(
+                    "INSERT OR REPLACE INTO app_settings(k,v) VALUES ('foreground_path', ?1)",
+                    rusqlite::params![wf],
+                )
+                .map_err(|e| e.to_string())?;
+                washed += 1;
+            }
+            let cnt: i64 = conn
+                .query_row(
+                    "SELECT COUNT(*) FROM db_registry WHERE path=?1 COLLATE NOCASE",
+                    rusqlite::params![wf],
+                    |r| r.get(0),
+                )
+                .map_err(|e| e.to_string())?;
+            if cnt == 0 {
+                if PathBuf::from(&wf).exists() {
+                    let stem = Path::new(&wf)
+                        .file_stem()
+                        .and_then(|s| s.to_str())
+                        .unwrap_or("Imported");
+                    let mut alias = stem.to_string();
+                    let mut n = 1;
+                    loop {
+                        let c: i64 = conn
+                            .query_row(
+                                "SELECT COUNT(*) FROM db_registry WHERE alias=?1 COLLATE NOCASE",
+                                rusqlite::params![alias],
+                                |r| r.get(0),
+                            )
+                            .unwrap_or(1);
+                        if c == 0 {
+                            break;
+                        }
+                        n += 1;
+                        alias = format!("{}-{}", stem, n);
+                    }
+                    let now = chrono::Utc::now().timestamp();
+                    conn.execute(
+                        "INSERT INTO db_registry(id, path, alias, remark, status, created_at, last_opened_at, dim_count, module_count, favorite_count) VALUES (?1, ?2, ?3, NULL, 'available', ?4, ?5, 0, 0, 0)",
+                        rusqlite::params![uuid::Uuid::new_v4().to_string(), wf, alias, now, now],
+                    )
+                    .map_err(|e| e.to_string())?;
+                }
+            }
+        }
+        conn.execute(
+            "INSERT OR REPLACE INTO app_settings(k,v) VALUES ('path_schema_version', '2')",
+            [],
+        )
+        .map_err(|e| e.to_string())?;
+        conn.execute(
+            "INSERT OR REPLACE INTO app_settings(k,v) VALUES ('path_migrate_washed', ?1)",
+            rusqlite::params![washed.to_string()],
+        )
+        .map_err(|e| e.to_string())?;
+        conn.execute(
+            "INSERT OR REPLACE INTO app_settings(k,v) VALUES ('path_migrate_deduped', ?1)",
+            rusqlite::params![deduped.to_string()],
+        )
+        .map_err(|e| e.to_string())?;
+        Ok((washed, deduped))
+    })();
+    match work {
+        Ok((w, d)) => {
+            conn.execute("COMMIT", []).map_err(|e| e.to_string())?;
+            let _ = refresh_missing_status(default_db);
+            eprintln!("[pmf] path-migrate v1→v2 washed={} deduped={}", w, d);
+            Ok((w, d))
+        }
+        Err(e) => {
+            let _ = conn.execute("ROLLBACK", []);
+            Err(format!("{}（已回滚，可用 {}.bak-* 恢复）", e, default_db.display()))
+        }
+    }
+}
 
 pub fn load_state_from_meta(
     default_db: &Path,
@@ -88,7 +262,7 @@ pub fn load_state_from_meta(
 
     let fg_path = fg
         .and_then(|s| {
-            let p = PathBuf::from(s.trim());
+            let p = super::path_resolve::strip_verbatim(std::path::Path::new(s.trim()));
             if p.is_absolute() {
                 Some(p)
             } else {
@@ -120,7 +294,7 @@ pub fn load_state_from_meta(
     if max_active > 1 {
         let fg_lower = fg_path
             .as_ref()
-            .map(|p| p.to_string_lossy().to_ascii_lowercase())
+           .map(|p| super::path_resolve::norm_key(p))
             .unwrap_or_default();
         let limit = (max_active as i64) - if fg_path.is_some() { 1 } else { 0 };
         if limit > 0 {
@@ -130,7 +304,7 @@ pub fn load_state_from_meta(
                 if let Ok(rows) = stmt.query_map(rusqlite::params![limit], |r| r.get::<_, String>(0)) {
                     let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
                     for r in rows.flatten() {
-                        let lower = r.to_ascii_lowercase();
+                       let lower = super::path_resolve::norm_key(std::path::Path::new(&r));
                         if lower == fg_lower {
                             continue;
                         }
@@ -138,7 +312,7 @@ pub fn load_state_from_meta(
                             continue;
                         }
                         let p = PathBuf::from(&r);
-                        if p.exists() && fg_path.as_ref().map(|fp| fp.to_string_lossy().to_ascii_lowercase() != lower).unwrap_or(true) {
+                       if p.exists() && fg_path.as_ref().map(|fp| super::path_resolve::norm_key(fp) != lower).unwrap_or(true) {
                             resident.push_back(p);
                         }
                     }
@@ -300,9 +474,12 @@ pub struct ActiveInfo {
 }
 
 fn row_from_sql(r: &rusqlite::Row) -> rusqlite::Result<RegistryRow> {
+    // need07 读侧再脱壳一次：防手工改库/旧备份恢复带 \\?\ 前缀
+    let raw: String = r.get(1)?;
+    let clean = super::path_resolve::display_path(std::path::Path::new(&raw));
     Ok(RegistryRow {
         id: r.get(0)?,
-        path: r.get(1)?,
+        path: clean,
         alias: r.get(2)?,
         remark: r.get(3)?,
         status: r.get(4)?,
@@ -393,10 +570,10 @@ pub fn db_get_active_info(app: AppHandle) -> Result<ActiveInfo, String> {
     let mut resident = Vec::new();
     let mut seen_lower: std::collections::HashSet<String> = std::collections::HashSet::new();
     if let Some(ref fg) = foreground {
-        seen_lower.insert(fg.path.to_ascii_lowercase());
+       seen_lower.insert(super::path_resolve::norm_key(std::path::Path::new(&fg.path)));
     }
     for p in &resident_paths {
-        let lower = p.to_string_lossy().to_ascii_lowercase();
+       let lower = super::path_resolve::norm_key(p);
         if !seen_lower.insert(lower.clone()) {
             continue;
         }
@@ -408,7 +585,7 @@ pub fn db_get_active_info(app: AppHandle) -> Result<ActiveInfo, String> {
     if resident.len() < max_active.saturating_sub(if foreground.is_some() { 1 } else { 0 }) {
         if let Ok(all) = query_registry_rows(&default_db, Some("available")) {
             for r in all {
-                let lower = r.path.to_ascii_lowercase();
+               let lower = super::path_resolve::norm_key(std::path::Path::new(&r.path));
                 if !seen_lower.insert(lower.clone()) {
                     continue;
                 }
@@ -449,7 +626,7 @@ pub fn db_set_max_active(app: AppHandle, max_active: usize) -> Result<(), String
     // dedup by lower
     {
         let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
-        resident.retain(|p| seen.insert(p.to_string_lossy().to_ascii_lowercase()));
+       resident.retain(|p| seen.insert(super::path_resolve::norm_key(p)));
     }
     while resident.len() > max.saturating_sub(1) {
         resident.pop_back();
@@ -705,6 +882,98 @@ mod tests {
             .query_row("SELECT payload_json FROM temp_carry WHERE id='carry_v1'", [], |r| r.get(0))
             .ok();
         assert!(v2.is_none());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn b8_migrate_washes_verbatim_and_dedupes() {
+        // fixture：真实文件 a.db（\\?\ + 普通重复行）+ 不存在的 b.db + 前台
+        // 期望 washed=3（行1/行3/前台）deduped=1（保留 last_opened 最大者 B），重跑幂等
+        let dir = unique_temp_dir("migv2");
+        let db = dir.join("Default.db");
+        init_default_db(&db).unwrap();
+        let real_a = dir.join("a.db");
+        std::fs::write(&real_a, b"fake-db").unwrap();
+        let verb_a = format!(r"\\?\{}", real_a.display());
+        let real_b = dir.join("b.db"); // 不建文件，测词法脱壳分支
+        let verb_b = format!(r"\\?\{}", real_b.display());
+        let conn = Connection::open(&db).unwrap();
+        conn.execute(
+            "INSERT INTO db_registry(id, path, alias, status, created_at, last_opened_at) VALUES ('id1',?1,'A','available',1,10)",
+            rusqlite::params![verb_a],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO db_registry(id, path, alias, status, created_at, last_opened_at) VALUES ('id2',?1,'B','available',1,20)",
+            rusqlite::params![real_a.to_string_lossy().to_string()],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO db_registry(id, path, alias, status, created_at, last_opened_at) VALUES ('id3',?1,'C','available',1,5)",
+            rusqlite::params![verb_b],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT OR REPLACE INTO app_settings(k,v) VALUES ('foreground_path', ?1)",
+            rusqlite::params![verb_a],
+        )
+        .unwrap();
+        drop(conn);
+        let (w, d) = migrate_path_schema_v2(&db).unwrap();
+        assert_eq!((w, d), (3, 1), "washed=行2+前台1，deduped=重复1");
+        let conn2 = Connection::open(&db).unwrap();
+        let paths: Vec<String> = {
+            let mut s = conn2.prepare("SELECT path FROM db_registry ORDER BY alias").unwrap();
+            s.query_map([], |r| r.get(0)).unwrap().collect::<Result<Vec<_>, _>>().unwrap()
+        };
+        assert_eq!(paths.len(), 2);
+        assert!(paths.iter().all(|p| !p.contains(r"\\?\")));
+        // 去重保留 last_opened_at 最大者（id2/B）；canonicalize 可能还原 8.3 短路径，
+        // 故按别名查行，再断言路径干净且文件存在
+        let kept_path: String = conn2
+            .query_row("SELECT path FROM db_registry WHERE alias='B'", [], |r| r.get(0))
+            .unwrap();
+        assert!(!kept_path.contains(r"\\?\"));
+        assert!(std::path::Path::new(&kept_path).exists());
+        let fg: String = conn2
+            .query_row("SELECT v FROM app_settings WHERE k='foreground_path'", [], |r| r.get(0))
+            .unwrap();
+        assert!(!fg.contains(r"\\?\"));
+        let ver: String = conn2
+            .query_row("SELECT v FROM app_settings WHERE k='path_schema_version'", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(ver, "2");
+        drop(conn2);
+        // 幂等重跑
+        let (w2, d2) = migrate_path_schema_v2(&db).unwrap();
+        assert_eq!((w2, d2), (0, 0));
+        // .bak 存在
+        let bak_exists = std::fs::read_dir(&dir).unwrap().any(|e| {
+            e.map(|x| x.file_name().to_string_lossy().contains(".bak-")).unwrap_or(false)
+        });
+        assert!(bak_exists);
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn b9_migrate_failure_keeps_db_and_bak() {
+        // 失败注入：缺 db_registry 表 → SELECT 失败 → Err，且原库不动、有 .bak
+        let dir = unique_temp_dir("migfail");
+        let db = dir.join("Default.db");
+        let conn = Connection::open(&db).unwrap();
+        conn.execute_batch("CREATE TABLE app_settings(k TEXT PRIMARY KEY, v TEXT NOT NULL);").unwrap();
+        conn.execute("INSERT INTO app_settings(k,v) VALUES ('max_active','2')", []).unwrap();
+        drop(conn);
+        let before = std::fs::read(&db).unwrap();
+        let res = migrate_path_schema_v2(&db);
+        assert!(res.is_err(), "缺表应迁移失败");
+        let after = std::fs::read(&db).unwrap();
+        assert_eq!(before, after, "原库必须 unchanged");
+        let bak_exists = std::fs::read_dir(&dir).unwrap().any(|e| {
+            e.map(|x| x.file_name().to_string_lossy().contains(".bak-")).unwrap_or(false)
+        });
+        assert!(bak_exists);
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

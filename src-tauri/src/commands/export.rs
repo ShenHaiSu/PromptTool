@@ -7,77 +7,46 @@ use tauri::AppHandle;
 // Helpers — data dir / default export dir
 // ------------------------------------------------------------------
 
-/// 默认导出目录 = data_dir_for(app).join("output")
+/// 默认导出目录：need07 新语义——空配置走 Documents/…/exports，
+/// 老默认 data/output 有文件则保留（resolve_export_dir 内部决策）。
 pub fn default_export_dir_for(app: &AppHandle) -> Result<PathBuf, String> {
-    Ok(super::migration::data_dir_for(app)?.join("output"))
+    super::path_resolve::resolve_export_dir(app, "")
 }
 
+#[allow(dead_code)]
 fn lexical_normalize(p: &Path) -> PathBuf {
-    let mut out = PathBuf::new();
-    for comp in p.components() {
-        match comp {
-            std::path::Component::ParentDir => {
-                out.pop();
-            }
-            std::path::Component::CurDir => {}
-            c => out.push(c.as_os_str()),
-        }
-    }
-    out
+    // need07 T13: 收敛为中枢调用，留一行转发避免行为漂移
+    super::path_resolve::lexical_normalize(p)
 }
 
-/// 归一导出目录：
-/// - 去首尾空白
-/// - 空串 → 回落 default_export_dir_for
-/// - 相对路径视作相对 data_dir_for 拼接
-/// - 若父目录存在则 canonicalize 父目录以还原 Windows 真实大小写
+/// 归一导出目录（need07）：
+/// - 去首尾空白；空串 → 新/老默认决策（resolve_export_dir）
+/// - 相对路径视作相对 active data_dir 拼接；绝对先脱壳
+/// - 末端经 canonical_stripped，永不返回 \\?\ 前缀
 fn normalize_export_dir(input: &str, app: &AppHandle) -> Result<PathBuf, String> {
     let trimmed = input.trim();
     if trimmed.is_empty() {
         return default_export_dir_for(app);
     }
-    let mut raw = PathBuf::from(trimmed);
-    // relative inputs historically may carry "data/" prefix — strip to avoid data/data/output
+    let raw = super::path_resolve::strip_verbatim(Path::new(trimmed));
     if !raw.is_absolute() {
         let s = raw.to_string_lossy().replace('\\', "/");
-        if s == "data" {
-            raw = PathBuf::from("");
-            if raw.as_os_str().is_empty() {
-                return default_export_dir_for(app);
-            }
-        } else if s.starts_with("data/") {
-            raw = PathBuf::from(&s["data/".len()..]);
-        }
-        if raw.as_os_str().is_empty() {
+        let rel = if s == "data" {
+            PathBuf::from("")
+        } else if let Some(st) = s.strip_prefix("data/") {
+            PathBuf::from(st)
+        } else {
+            raw
+        };
+        if rel.as_os_str().is_empty() {
             return default_export_dir_for(app);
         }
-        let base = super::migration::data_dir_for(app)?;
-        raw = base.join(raw);
+        let base = super::path_resolve::resolve_data_dir(app)
+            .map(|r| PathBuf::from(r.active))
+            .unwrap_or(super::migration::data_dir_for(app)?);
+        return super::path_resolve::canonical_stripped(&base.join(rel));
     }
-    // Parent canonicalize to restore real casing, fallback to lexical
-    let normalized = if raw.exists() {
-        raw.canonicalize()
-            .map_err(|e| format!("无法规范化路径 '{}': {}", raw.display(), e))?
-    } else if let Some(parent) = raw.parent() {
-        if parent.exists() {
-            if let Ok(canon) = parent.canonicalize() {
-                if let Some(file) = raw.file_name() {
-                    let mut out = canon;
-                    out.push(file);
-                    lexical_normalize(&out)
-                } else {
-                    lexical_normalize(&raw)
-                }
-            } else {
-                lexical_normalize(&raw)
-            }
-        } else {
-            lexical_normalize(&raw)
-        }
-    } else {
-        lexical_normalize(&raw)
-    };
-    Ok(normalized)
+    super::path_resolve::canonical_stripped(&raw)
 }
 
 fn format_local_filename() -> String {
@@ -187,45 +156,35 @@ pub fn db_export_library_to_dir(app: AppHandle, dir: String) -> Result<ExportToD
     })
 }
 
+/// need07 重写：占位符拦截 → 脱壳 → 相对拼 active → ensure 保活 →
+/// Windows 文件用 explorer 双参数 `/select,` + 路径，目录直接打开；
+/// spawn 失败回退 `tauri_plugin_opener::open_path`。相对/占位符永不透传 explorer。
 #[tauri::command]
-pub fn db_reveal_in_explorer(_app: AppHandle, path: String) -> Result<(), String> {
-    let p = PathBuf::from(path.trim());
-    if p.as_os_str().is_empty() {
+pub fn db_reveal_in_explorer(app: AppHandle, path: String) -> Result<(), String> {
+    use super::path_resolve::{display_path, ensure_dir, resolve_data_dir, strip_verbatim};
+    let input = path.trim();
+    if input.is_empty() {
         return Err("路径不能为空".to_string());
     }
-    // Prefer opener crate's reveal if available; fallback to opener plugin
-    // Use std::process for minimal dependency: rely on tauri_plugin_opener's open_path via app if needed.
-    // Here we try `opener` crate behavior via `tauri_plugin_opener::open_path` is not directly accessible
-    // without AppHandle opener state, so we use `open` crate fallback: just open the directory.
-    #[cfg(target_os = "windows")]
-    {
-        let target = if p.is_file() {
-            // explorer /select, "file"
-            let arg = format!("/select,\"{}\"", p.display());
-            std::process::Command::new("explorer")
-                .arg(arg)
-                .spawn()
-                .map_err(|e| format!("无法打开所在文件夹: {}", e))?;
-            return Ok(());
-        } else {
-            p.clone()
-        };
-        std::process::Command::new("explorer")
-            .arg(target.as_os_str())
-            .spawn()
-            .map_err(|e| format!("无法打开所在文件夹: {}", e))?;
-        return Ok(());
+    if input.starts_with('<') {
+        return Err("路径尚未解析（收到占位符），请先配置具体目录".to_string());
     }
-    #[cfg(not(target_os = "windows"))]
-    {
-        // Best-effort: open with xdg-open / open
-        let opener = if cfg!(target_os = "macos") { "open" } else { "xdg-open" };
-        std::process::Command::new(opener)
-            .arg(p.as_os_str())
-            .spawn()
-            .map_err(|e| format!("无法打开所在文件夹: {}", e))?;
-        Ok(())
+    let raw = strip_verbatim(Path::new(input));
+    let target = if raw.is_absolute() {
+        raw
+    } else {
+        let active = PathBuf::from(resolve_data_dir(&app)?.active);
+        active.join(raw)
+    };
+    // 文件保活其 parent，目录保活自身；打开逻辑收敛中枢 reveal_target
+    if target.is_file() {
+        let parent = target.parent().map(|p| p.to_path_buf()).unwrap_or_else(|| target.clone());
+        ensure_dir(&parent)?;
+    } else {
+        ensure_dir(&target)?;
     }
+    eprintln!("[pmf] reveal {}", display_path(&target));
+    super::path_resolve::reveal_target(&target)
 }
 
 // ------------------------------------------------------------------

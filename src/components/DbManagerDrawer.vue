@@ -5,6 +5,7 @@ import { Input } from '@/components/ui/input'
 import { Card, CardHeader, CardTitle, CardContent } from '@/components/ui/card'
 import { useDbRegistryStore } from '@/stores/dbRegistry'
 import type { RegistryRow } from '@/stores/dbRegistry'
+import { displayPath } from '@/lib/pathDisplay'
 import { useToast } from '@/composables/useToast'
 
 defineProps<{ open: boolean }>()
@@ -39,15 +40,16 @@ async function handleRemove(row: RegistryRow): Promise<void> {
   const isMissing = row.status === 'missing'
   const msg = isMissing
     ? `该库文件已不存在，确定移除注册「${row.alias}」？`
-    : `确定删除「${row.alias}」？\n路径：${row.path}\n此操作将永久删除数据库文件及伴生文件，且不可恢复。`
+    : `确定删除「${row.alias}」？\n路径：${displayPath(row.path)}\n此操作将永久删除数据库文件及伴生文件，且不可恢复。`
   if (!confirm(msg)) return
   try { await store.removeRegistry(row.path) } catch (e) { push(String(e), 'error') }
 }
 
 async function handleRepair(row: RegistryRow): Promise<void> {
-  let newPath: string | null = null
-  if (!newPath) newPath = window.prompt('请输入新 .db 绝对路径', '')?.trim() || null
-  if (!newPath) return
+  const raw: string | null = window.prompt('请输入新 .db 绝对路径', '')
+  const newPath: string | null = raw?.trim() ? raw.trim() : null
+  if (!newPath) { push('路径不能为空，请输入具体 .db 绝对路径', 'warning'); return }
+  if (newPath.startsWith('<')) { push('路径不可为占位符，请输入具体 .db 绝对路径', 'warning'); return }
   try { await store.repairPath(row.path, newPath); push('已补新路径', 'success') } catch (e) { push(String(e), 'error') }
 }
 
@@ -94,7 +96,7 @@ async function handleCreate(): Promise<void> {
       <div class="flex-1 overflow-auto p-4 space-y-4">
         <div v-if="store.activeInfo?.foreground" class="rounded bg-muted p-3 text-sm">
           <div class="font-medium">当前前台：{{ store.activeInfo.foreground.alias }}</div>
-          <div class="text-xs text-muted-foreground break-all">{{ store.activeInfo.foreground.path }}</div>
+          <div class="text-xs text-muted-foreground break-all">{{ displayPath(store.activeInfo.foreground.path) }}</div>
         </div>
         <div class="space-y-2">
           <div v-for="row in store.list" :key="row.id" :data-testid="`registry-row-${row.alias}`" class="rounded border p-3">
@@ -105,7 +107,7 @@ async function handleCreate(): Promise<void> {
               <span v-else-if="store.activeInfo?.resident.some(r => r.id === row.id)" class="rounded bg-muted px-1 py-0.5 text-xs">驻留</span>
               <span v-if="row.status === 'missing'" class="rounded bg-red-100 px-1 py-0.5 text-xs text-red-700">失效</span>
             </div>
-            <div class="text-xs text-muted-foreground break-all">{{ row.path }}</div>
+            <div class="text-xs text-muted-foreground break-all">{{ displayPath(row.path) }}</div>
             <div class="text-xs text-muted-foreground">{{ row.dimCount }} 分类 · {{ row.moduleCount }} 词条 · 收藏 {{ row.favoriteCount }}</div>
             <div v-if="row.remark" class="text-xs">{{ row.remark }}</div>
             <div v-if="row.status === 'missing'" class="text-xs text-red-500">文件不存在</div>

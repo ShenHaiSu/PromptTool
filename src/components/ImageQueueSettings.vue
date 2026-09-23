@@ -1,9 +1,10 @@
 <script setup lang="ts">
-import { ref, computed } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { useToast } from '@/composables/useToast'
 import { useImageQueueStore } from '@/stores/imageQueue'
+import { iqGetResolvedOutputDir, pathGetBases } from '@/lib/imageQueueApi'
 import {
   IQ_CONCURRENCY_OPTIONS,
   IQ_DEFAULT_API_BASE,
@@ -104,6 +105,19 @@ function onResetApiBase(): void {
   iq.config.apiBase = IQ_DEFAULT_API_BASE
   iq.markDirty()
 }
+// need07：输出目录 placeholder 显示后端解析值；老默认保留时给 hint
+const resolvedOutputDir = ref('')
+const legacyKeptHint = ref('')
+onMounted(async () => {
+  try {
+    const [dir, bases] = await Promise.all([iqGetResolvedOutputDir(), pathGetBases()])
+    resolvedOutputDir.value = dir
+    const norm = (s: string): string => s.replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase()
+    if (!iq.config.outputDir.trim() && norm(dir) === norm(`${bases.activeData}/output/images`)) {
+      legacyKeptHint.value = `旧默认位置（已保留）：${dir}`
+    }
+  } catch { /* 降级：静态 hint */ }
+})
 </script>
 
 <template>
@@ -207,12 +221,13 @@ function onResetApiBase(): void {
         <Input
           data-testid="iq-output-dir"
           class="h-7 flex-1 text-xs"
-          :placeholder="IQ_DEFAULT_OUTPUT_HINT"
+          :placeholder="resolvedOutputDir || IQ_DEFAULT_OUTPUT_HINT"
           :model-value="iq.config.outputDir"
           @update:model-value="iq.config.outputDir = String($event); iq.markDirty()"
         />
         <Button data-testid="iq-output-browse" size="sm" variant="outline" class="h-7 px-2 text-xs" @click="onBrowseOutput">浏览</Button>
       </label>
+      <div v-if="legacyKeptHint" class="pl-24 text-[11px] text-muted-foreground">{{ legacyKeptHint }}</div>
       <label class="flex items-center gap-2 text-xs">
         <span class="w-20 shrink-0 text-muted-foreground">生图分辨率</span>
         <select

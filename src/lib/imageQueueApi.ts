@@ -1,9 +1,10 @@
 /**
- * 生图队列 invoke 封装（need05 F1 §1 / F2 §1 / B2 §1.3）
- * 与 `src/lib/db.ts` 同风格：参数一律 camelCase，DTO 集中。
- * 后端施工中：调用失败由上层降级处理（事件缺失时轮询，见 store）。
- */
+* 生图队列 invoke 封装（need05 F1 §1 / F2 §1 / B2 §1.3）
+* 与 `src/lib/db.ts` 同风格：参数一律 camelCase，DTO 集中。
+* 后端施工中：调用失败由上层降级处理（事件缺失时轮询，见 store）。
+*/
 import { invoke } from '@tauri-apps/api/core'
+import { stripVerbatim } from './pathDisplay'
 import type { ImageQueueConfig } from './imageQueue'
 import { IQ_DEFAULT_CONFIG, IQ_KEY_SET_PLACEHOLDER } from './imageQueue'
 
@@ -80,9 +81,18 @@ export function configToPayload(c: ImageQueueConfig, keyTouched: boolean, proxyT
   }
 }
 
+/** need07：旧缓存清洗——`\\?\` 脱壳 + `<...>` 占位符置空。 */
+export function washOutputDir(v: unknown): string {
+  if (typeof v !== 'string') return ''
+  const t = v.trim()
+  if (!t || t.startsWith('<')) return ''
+  return stripVerbatim(t)
+}
+
 /** 后端视图 → 前端内存态（占位转 `*State='set'`，原文置空等待重输；脱敏串仅展示）。 */
 export function viewToConfig(view: Partial<IqConfigView>): ImageQueueConfig {
   const merged: ImageQueueConfig = { ...IQ_DEFAULT_CONFIG, ...(view as object) } as ImageQueueConfig
+  merged.outputDir = washOutputDir(merged.outputDir)
   // 兼容旧 localStorage / 旧后端回包缺超时字段的情形
   if (!Number.isFinite(merged.connectTimeoutSecs)) merged.connectTimeoutSecs = IQ_DEFAULT_CONFIG.connectTimeoutSecs
   if (!Number.isFinite(merged.totalTimeoutSecs)) merged.totalTimeoutSecs = IQ_DEFAULT_CONFIG.totalTimeoutSecs
@@ -120,7 +130,7 @@ export function toLocalCache(c: ImageQueueConfig): Record<string, unknown> {
   const { apiKey: _omitKey, proxyUrl: _omitProxy, ...rest } = c
   void _omitKey
   void _omitProxy
-  return { ...rest, apiKeyState: c.apiKeyState, proxyUrlState: c.proxyUrlState }
+  return { ...rest, outputDir: washOutputDir(c.outputDir), apiKeyState: c.apiKeyState, proxyUrlState: c.proxyUrlState }
 }
 
 export async function iqGetConfig(): Promise<IqConfigView> {
@@ -182,4 +192,38 @@ export interface EmbeddedImageMeta {
 
 export async function readImageMeta(filePath: string): Promise<EmbeddedImageMeta | null> {
   return await invoke<EmbeddedImageMeta | null>('iq_read_image_meta', { filePath })
+}
+
+/** need07：输出目录解析/打开 + 路径探针（camelCase DTO）。 */
+export interface PathBases {
+  exeDir: string
+  exeData: string
+  activeData: string
+  docDir: string | null
+  base: 'exe' | 'appdata'
+  writable: boolean
+}
+
+export interface PathMigrateStatus {
+  version: string
+  washed: number
+  deduped: number
+}
+
+/** 只解析不打开，供设置页 placeholder/验收。 */
+export async function iqGetResolvedOutputDir(): Promise<string> {
+  return invoke<string>('iq_get_resolved_output_dir')
+}
+
+/** 解析 + 保活 + 打开，返回 display 形态绝对目录。 */
+export async function iqOpenOutputDir(): Promise<string> {
+  return invoke<string>('iq_open_output_dir')
+}
+
+export async function pathGetBases(): Promise<PathBases> {
+  return invoke<PathBases>('path_get_bases')
+}
+
+export async function pathMigrateStatus(): Promise<PathMigrateStatus> {
+  return invoke<PathMigrateStatus>('path_migrate_status')
 }

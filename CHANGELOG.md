@@ -1,5 +1,19 @@
 # Changelog
 
+## need07 — 2026-09-23 · Windows 路径治理 + 存量无感迁移（方案B）
+
+### 路径中枢与目录回退
+
+- **新增 `commands/path_resolve.rs`**：`strip_verbatim/display_path/norm_key/lexical_normalize/canonical_stripped/default_*_for` 纯函数 + `resolve_data_dir/resolve_image_dir/resolve_export_dir/ensure_dir` 薄适配层，零新依赖；`resolve_data_dir` 双 base（`exe/data` 可写即用，否则回退 `app_data_dir` + 探针 `.pmf_write_probe.tmp`），`setup` 改用 `active`。
+- **存储/展示/比较三规则**：入库永不含 `\\?\`（canonicalize 后必脱壳 + 盘符大写），日志/前端一律 `display_path`，比较一律 `norm_key`；`check_disk_space` 先脱壳再 `encode_utf16`。
+- **reveal 重写**：`db_reveal_in_explorer(app, path)` 占位符拦截 + 相对拼 active + `ensure` 保活 + Windows `explorer /select,` 双参数 + `opener` 回退；新增 `iq_open_output_dir/iq_get_resolved_output_dir/path_get_bases/path_migrate_status`。
+
+### 注册表迁移与前端契约
+
+- **`migrate_path_schema_v2`**：`Default.db` 字符串洗白（脱壳 + 盘符大写 + `norm_key` 去重 + 前台补注册），单事务 + `.bak-<ts>` + 幂等 `path_schema_version='2'`，失败不阻断启动；读写双防（入口 `canonical_stripped` + 读侧再脱壳 + `wasForeground` 改 `norm_key`）。
+- **前端**：新增 `src/lib/pathDisplay.ts`（`stripVerbatim/displayPath`，与后端锁定）+ 单测；`ImageQueuePanel.onOpenOutput` 空配置改调 `iq_open_output_dir`；`imageQueueApi` 新增解析/探针 + 旧缓存 `washOutputDir`；`DbManagerDrawer/LibraryDialog` 展示过 `displayPath`，`repair` 拒绝空/占位符；`ImageQueueSettings` placeholder 显示解析值 + 老默认保留 hint。
+- **收敛与清理**：三处 `lexical_normalize` 收敛为中枢转发；删除 `docs/need05/apikey.txt`；新增 `docs/pitfalls/02-windows-path.md`。
+
 ## v3.0.1 — 2026-08-25 · 数据库路径迁移 + 词库导出/去重导入
 
 ### 数据库路径迁移（Need01-01）

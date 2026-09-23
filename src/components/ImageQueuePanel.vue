@@ -3,6 +3,7 @@ import { ref, computed, onMounted, onBeforeUnmount, nextTick, watch } from 'vue'
 import { Button } from '@/components/ui/button'
 import { useToast } from '@/composables/useToast'
 import { dbRevealInExplorer } from '@/lib/db'
+import { iqOpenOutputDir } from '@/lib/imageQueueApi'
 import { useImageQueueStore } from '@/stores/imageQueue'
 import { refillFromEngine, cancelRefill, resetRefillCancel, prepareStartQueue } from '@/lib/imageLoop'
 import { useVirtualizer } from '@tanstack/vue-virtual'
@@ -43,9 +44,14 @@ async function onClearFinished(): Promise<void> {
 }
 
 async function onOpenOutput(): Promise<void> {
-  const dir = iq.config.outputDir.trim() || '<data_dir>/output/images'
   try {
-    await dbRevealInExplorer(iq.config.outputDir.trim() || dir)
+    if (!iq.config.outputDir.trim()) {
+      // need07：空配置走后端解析+保活+打开，不再透传 <data_dir> 占位符
+      const dir = await iqOpenOutputDir()
+      push(`已打开 ${dir}`, 'success', 1500)
+    } else {
+      await dbRevealInExplorer(iq.config.outputDir.trim())
+    }
   } catch (err) {
     push(`打开失败：${err instanceof Error ? err.message : String(err)}`, 'error')
   }

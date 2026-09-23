@@ -5,6 +5,7 @@ pub mod export;
 pub mod image_queue;
 pub mod meta;
 pub mod migration;
+pub mod path_resolve;
 pub mod rules;
 pub mod segment;
 pub mod translation;

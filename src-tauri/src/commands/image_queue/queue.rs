@@ -381,23 +381,14 @@ pub fn has_image_magic(head: &[u8]) -> bool {
 }
 
 fn lexical_normalize(p: &Path) -> PathBuf {
-    let mut out = PathBuf::new();
-    for comp in p.components() {
-        match comp {
-            std::path::Component::ParentDir => {
-                out.pop();
-            }
-            std::path::Component::CurDir => {}
-            c => out.push(c.as_os_str()),
-        }
-    }
-    out
+    // need07 T13: 收敛为中枢调用，留一行转发避免行为漂移
+    super::super::path_resolve::lexical_normalize(p)
 }
 
 /// 目录归一（纯路径计算，不触碰 fs；`ensure_image_dir` 负责创建 + 可写探测）：
-/// - `""` → `{data_dir}/output/images`；
+/// - `\"\"` → `{data_dir}/output/images`（保持旧测例语义；新 Documents 默认走中枢 `resolve_image_dir`）；
 /// - 相对 → 相对 data_dir 拼接（strip 历史 `data/` 前缀，与 export 一致）；
-/// - 绝对 → 直接用。
+/// - 绝对 → 直接用；末端统一脱壳（永不返回 `\\?\` 前缀）。
 pub fn normalize_image_dir_for(data_dir: &Path, input: &str) -> Result<PathBuf, String> {
     let trimmed = input.trim();
     if trimmed.is_empty() {
@@ -417,7 +408,7 @@ pub fn normalize_image_dir_for(data_dir: &Path, input: &str) -> Result<PathBuf, 
         }
         raw = data_dir.join(raw);
     }
-    Ok(lexical_normalize(&raw))
+    Ok(super::super::path_resolve::strip_verbatim(&lexical_normalize(&raw)))
 }
 
 fn unique_filename_in(dir: &Path, stem: &str) -> PathBuf {
@@ -503,12 +494,14 @@ extern "system" {
 fn check_disk_space(dir: &Path) -> Result<(), String> {
     #[cfg(target_os = "windows")]
     {
-        let wide: Vec<u16> = dir.to_string_lossy().encode_utf16().chain(std::iter::once(0)).collect();
+        // need07: 先脱壳再 encode_utf16，日志用 display_path（无 \\?\）
+        let clean = super::super::path_resolve::strip_verbatim(dir);
+        let wide: Vec<u16> = clean.to_string_lossy().encode_utf16().chain(std::iter::once(0)).collect();
         let mut free: u64 = 0;
         let ok = unsafe { GetDiskFreeSpaceExW(wide.as_ptr(), std::ptr::null_mut(), std::ptr::null_mut(), &mut free) };
         if ok == 0 {
             // 查不到水位不拦路（记日志即可），避免误杀正常任务。
-            eprintln!("[image-queue] 磁盘水位查询失败，放行：{}", dir.display());
+            eprintln!("[image-queue] 磁盘水位查询失败，放行：{}", super::super::path_resolve::display_path(dir));
             return Ok(());
         }
         if free < DISK_WATERLINE_BYTES {
@@ -529,17 +522,10 @@ fn check_disk_space(dir: &Path) -> Result<(), String> {
 // ------------------------------------------------------------------
 
 fn ensure_image_dir(app: &AppHandle, input: &str) -> Result<PathBuf, String> {
-    let data_dir = super::super::migration::data_dir_for(app)?;
-    let dir = normalize_image_dir_for(&data_dir, input)?;
-    std::fs::create_dir_all(&dir).map_err(|e| format!("目录不存在且无法创建 '{}': {}", dir.display(), e))?;
-    let probe = dir.join(".pmf_write_probe.tmp");
-    match std::fs::write(&probe, b"probe") {
-        Ok(_) => {
-            let _ = std::fs::remove_file(&probe);
-        }
-        Err(e) => return Err(format!("输出目录不可写 '{}': {}", dir.display(), e)),
-    }
-    Ok(dir)
+    // need07: 空输入走新/老默认决策（Documents 优先、老默认有文件则保留），相对拼 active
+    let dir = super::super::path_resolve::resolve_image_dir(app, input)?;
+    super::super::path_resolve::ensure_dir(&dir)
+        .map_err(|e| format!("输出目录不可用 '{}': {}", super::super::path_resolve::display_path(&dir), e))
 }
 
 fn same_day_count(tasks: &HashMap<String, ImageTask>, now_ts: i64) -> usize {
@@ -1317,6 +1303,26 @@ pub fn iq_read_image_meta(file_path: String) -> Result<Option<serde_json::Value>
         return Ok(None);
     }
     extract_embedded_meta(&bytes, &ext)
+}
+/// need07：解析当前配置的输出目录（只解析不打开，供设置页 placeholder/验收）。
+/// 空配置走新/老默认决策，返回 display 形态绝对目录。
+#[tauri::command]
+pub fn iq_get_resolved_output_dir(state: State<'_, ImageQueueState>, app: AppHandle) -> Result<String, String> {
+    let output_dir = state.config.lock().map_err(|e| format!("配置锁失败：{}", e))?.output_dir.clone();
+    let dir = super::super::path_resolve::resolve_image_dir(&app, &output_dir)?;
+    Ok(super::super::path_resolve::display_path(&dir))
+}
+
+/// need07：解析 + 保活 + 打开输出目录（根治异常2：空配置不再透传占位符给 explorer）。
+/// 返回 display 形态绝对目录供 toast 展示。
+#[tauri::command]
+pub fn iq_open_output_dir(state: State<'_, ImageQueueState>, app: AppHandle) -> Result<String, String> {
+    let output_dir = state.config.lock().map_err(|e| format!("配置锁失败：{}", e))?.output_dir.clone();
+    let dir = super::super::path_resolve::resolve_image_dir(&app, &output_dir)?;
+    let dir = super::super::path_resolve::ensure_dir(&dir)?;
+    eprintln!("[pmf] reveal {}", super::super::path_resolve::display_path(&dir));
+    super::super::path_resolve::reveal_target(&dir)?;
+    Ok(super::super::path_resolve::display_path(&dir))
 }
 
 // 提供 Agnes provider 复用（test_connection 的解析经 generate_one 内部完成）。

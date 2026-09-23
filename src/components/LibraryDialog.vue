@@ -3,6 +3,7 @@ import { ref, onMounted } from 'vue'
 import { Button } from '@/components/ui/button'
 import { useToast } from '@/composables/useToast'
 import { dbExportLibrary, dbImportLibraryText, dbGetDefaultExportDir, dbExportLibraryToDir, dbRevealInExplorer } from '@/lib/db'
+import { displayPath } from '@/lib/pathDisplay'
 import type { ImportMode, LibraryImportReport } from '@/lib/db'
 
 const emit = defineEmits<{ (e: 'close'): void; (e: 'imported'): void }>()
@@ -187,9 +188,9 @@ const totalErrors = (): number => report.value?.errors.length ?? 0
           <div class="mb-2 flex items-center gap-2">
             <input
               data-testid="library-export-dir"
-              :value="exportDir || defaultDir"
-              :title="exportDir || defaultDir"
-              :placeholder="defaultDir ? `默认：${defaultDir}` : '默认：…/data/output'"
+              :value="displayPath(exportDir || defaultDir)"
+              :title="displayPath(exportDir || defaultDir)"
+              :placeholder="defaultDir ? `默认：${displayPath(defaultDir)}` : '默认：…/data/output'"
               readonly
               class="flex-1 truncate rounded-md border bg-muted/30 px-2 py-1.5 text-xs text-muted-foreground"
             />
@@ -209,7 +210,7 @@ const totalErrors = (): number => report.value?.errors.length ?? 0
           </Button>
           <!-- Need02: 落盘结果 + 打开文件夹 -->
           <div v-if="lastExportPath" data-testid="library-export-result" class="mt-2 rounded-md border bg-muted/30 px-2 py-2 text-xs">
-            <p class="break-all text-muted-foreground">已落盘至 {{ lastExportPath }}</p>
+            <p class="break-all text-muted-foreground">已落盘至 {{ displayPath(lastExportPath ?? '') }}</p>
             <Button data-testid="library-export-open-dir" variant="ghost" size="sm" class="mt-1 h-6 px-2 text-xs" @click="onOpenDir">打开文件夹</Button>
           </div>
         </section>

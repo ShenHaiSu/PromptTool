@@ -12,21 +12,25 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
-            // --- Need04: Default.db + AppState ---
-            let data_dir = match commands::migration::data_dir_for(&app.handle()) {
-                Ok(d) => d,
+            // --- Need07: 双 base 数据目录（exe/data 可写即用，否则回退 app_data_dir） ---
+            let report = match commands::path_resolve::resolve_data_dir(&app.handle()) {
+                Ok(r) => r,
                 Err(e) => {
-                    eprintln!("[pmf] data_dir_for failed: {}", e);
+                    eprintln!("[pmf] resolve_data_dir failed: {}", e);
                     return Ok(());
                 }
             };
-            let default_db = data_dir.join("Default.db");
+            eprintln!("[pmf] data_dir active={} base={} writable={}", report.active, report.base, report.writable);
+            let default_db = std::path::PathBuf::from(report.active).join("Default.db");
             if let Err(e) = init_default_db(&default_db) {
                 eprintln!("[pmf] init_default_db failed: {}", e);
                 if let Some(dir) = std::env::current_exe().ok().and_then(|p| p.parent().map(|x| x.to_path_buf())) {
-                    let _ = std::fs::write(dir.join("init_default_db_error.log"), format!("[pmf] init_default_db failed: {}
-", e));
+                    let _ = std::fs::write(dir.join("init_default_db_error.log"), format!("[pmf] init_default_db failed: {}\n", e));
                 }
+            }
+            // --- Need07: 注册表路径无感迁移 v1→v2（失败不阻断启动，只日志） ---
+            if let Err(e) = commands::meta::migrate_path_schema_v2(&default_db) {
+                eprintln!("[pmf] migrate_path_schema_v2 skipped: {}", e);
             }
             // Legacy init_db for single-DB compat is no longer auto-run; keep pmf.db migration via auto_migrate
             let (fg, max_active, resident) = load_state_from_meta(&default_db).unwrap_or((None, 2, VecDeque::new()));
@@ -104,6 +108,9 @@ pub fn run() {
             commands::export::db_get_default_export_dir,
             commands::export::db_export_library_to_dir,
             commands::export::db_reveal_in_explorer,
+            // --- Need07: 路径探针 2 + 输出目录打开/解析 2 ---
+            commands::path_resolve::path_get_bases,
+            commands::path_resolve::path_migrate_status,
             commands::translation::db_batch_update_display_names,
             commands::translation::db_batch_update_display_names_text,
             // --- Need05: 生图队列 10 命令 + need06 解析入口 1 命令 ---
@@ -117,7 +124,9 @@ pub fn run() {
             commands::image_queue::queue::iq_remove,
             commands::image_queue::queue::iq_clear_finished,
             commands::image_queue::queue::iq_list,
-            commands::image_queue::queue::iq_read_image_meta
+            commands::image_queue::queue::iq_read_image_meta,
+            commands::image_queue::queue::iq_get_resolved_output_dir,
+            commands::image_queue::queue::iq_open_output_dir
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
