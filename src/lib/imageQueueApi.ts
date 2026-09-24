@@ -65,6 +65,8 @@ export function configToPayload(c: ImageQueueConfig, keyTouched: boolean, proxyT
     protocol: c.protocol,
     loopEnabled: c.loopEnabled,
     autoRandomOnStart: c.autoRandomOnStart,
+    loopUsePartial: c.loopUsePartial,
+    loopAllowNsfw: c.loopAllowNsfw,
     apiBase: c.apiBase,
     apiKey: keyTouched ? c.apiKey : IQ_KEY_SET_PLACEHOLDER,
     apiKeyMasked: c.apiKeyMasked,
@@ -98,6 +100,9 @@ export function viewToConfig(view: Partial<IqConfigView>): ImageQueueConfig {
   if (!Number.isFinite(merged.totalTimeoutSecs)) merged.totalTimeoutSecs = IQ_DEFAULT_CONFIG.totalTimeoutSecs
   // 兼容旧后端回包缺 embedMeta 的情形（旧 image_queue.json 无此字段 → 默认 true）
   if (typeof merged.embedMeta !== 'boolean') merged.embedMeta = true
+  // 兼容旧后端回包缺队列独立随机字段的情形（默认纯随机、不含 NSFW）
+  if (typeof merged.loopUsePartial !== 'boolean') merged.loopUsePartial = false
+  if (typeof merged.loopAllowNsfw !== 'boolean') merged.loopAllowNsfw = false
   // 兼容旧后端回包缺 apiKeyMasked 的情形
   if (typeof merged.apiKeyMasked !== 'string') merged.apiKeyMasked = ''
   if ((view.apiKey ?? '') === IQ_KEY_SET_PLACEHOLDER) {

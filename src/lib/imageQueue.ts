@@ -34,11 +34,15 @@ export type IqApiKeyState = 'unset' | 'set'
 /** 代理地址与密钥同等敏感：占位语义与 apiKey 完全对称。 */
 export type IqProxyUrlState = 'unset' | 'set'
 
-export interface ImageQueueConfig {
+ export interface ImageQueueConfig {
   protocol: IqProtocol
   loopEnabled: boolean
   /** 开始生图前自动随机一批新提示词入队（数量取并发数）。 */
   autoRandomOnStart: boolean
+  /** 队列独立可控随机：以画布已选项为锚点，仅随机缺口维度（默认 false=纯随机）。 */
+  loopUsePartial: boolean
+  /** 队列随机是否含 NSFW 条目（默认 false）。 */
+  loopAllowNsfw: boolean
   apiBase: string
   /** 内存值；`__SET__` = 服务端已有，保持不变（聚焦待重输时由组件清空）。 */
   apiKey: string
@@ -68,6 +72,8 @@ export const IQ_DEFAULT_CONFIG: ImageQueueConfig = {
   protocol: 'agnes',
   loopEnabled: false,
   autoRandomOnStart: false,
+  loopUsePartial: false,
+  loopAllowNsfw: false,
   apiBase: IQ_DEFAULT_API_BASE,
   apiKey: '',
   apiKeyState: 'unset',

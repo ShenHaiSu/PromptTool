@@ -28,6 +28,12 @@ pub struct ImageQueueConfig {
     /// 开始生图前自动随机一批新提示词入队（旧 `loop_after_random` 已删除；旧配置残留字段自动忽略）。
     #[serde(default)]
     pub auto_random_on_start: bool,
+    /// 队列独立可控随机：以画布为锚点，仅随机缺口维度（默认 false=纯随机）。
+    #[serde(default)]
+    pub loop_use_partial: bool,
+    /// 队列随机是否含 NSFW 条目（默认 false）。
+    #[serde(default)]
+    pub loop_allow_nsfw: bool,
     /// 默认 https://apihub.agnes-ai.com，收尾去 "/"。
     pub api_base: String,
     /// 永不经 `iq_get_config` 外泄（skip_serializing）。
@@ -74,6 +80,8 @@ impl Default for ImageQueueConfig {
             protocol: "agnes".to_string(),
             loop_enabled: false,
             auto_random_on_start: false,
+            loop_use_partial: false,
+            loop_allow_nsfw: false,
             api_base: DEFAULT_API_BASE.to_string(),
             api_key: String::new(),
             output_dir: String::new(),
@@ -99,6 +107,10 @@ pub struct ImageQueueConfigView {
     pub protocol: String,
     pub loop_enabled: bool,
     pub auto_random_on_start: bool,
+    #[serde(default)]
+    pub loop_use_partial: bool,
+    #[serde(default)]
+    pub loop_allow_nsfw: bool,
     pub api_base: String,
     pub api_key: String,
     #[serde(default)]
@@ -122,6 +134,8 @@ impl ImageQueueConfig {
             protocol: self.protocol.clone(),
             loop_enabled: self.loop_enabled,
             auto_random_on_start: self.auto_random_on_start,
+            loop_use_partial: self.loop_use_partial,
+            loop_allow_nsfw: self.loop_allow_nsfw,
             api_base: self.api_base.clone(),
             api_key: if self.api_key.is_empty() {
                 String::new()
@@ -347,6 +361,7 @@ mod tests {
         assert_eq!(c.connect_timeout_secs, 15);
         assert_eq!(c.total_timeout_secs, 300);
         assert!(!c.loop_enabled && !c.auto_random_on_start && !c.proxy_on);
+        assert!(!c.loop_use_partial && !c.loop_allow_nsfw);
         assert!(c.embed_meta);
     }
 
@@ -395,6 +410,57 @@ mod tests {
         assert_eq!(cfg.total_timeout_secs, 300);
         assert!(!cfg.auto_random_on_start);
         assert!(!cfg.loop_enabled);
+    }
+
+    #[test]
+    fn legacy_payload_missing_loop_random_fields_defaults_false() {
+        // 回归：旧 image_queue.json 无 loopUsePartial/loopAllowNsfw 时默认 false（纯随机、不含 NSFW）。
+        let raw = serde_json::json!({
+            "protocol": "agnes",
+            "loopEnabled": false,
+            "apiBase": DEFAULT_API_BASE,
+            "outputDir": "",
+            "size": "1K",
+            "ratio": "1:1",
+            "concurrency": 2,
+            "proxyOn": false,
+            "proxyUrl": "",
+            "rememberKey": true,
+            "connectTimeoutSecs": 15,
+            "totalTimeoutSecs": 300
+        });
+        let cfg: ImageQueueConfig = serde_json::from_value(raw).expect("旧配置应兼容队列随机字段默认值");
+        assert!(!cfg.loop_use_partial);
+        assert!(!cfg.loop_allow_nsfw);
+        assert!(!cfg.view().loop_use_partial);
+        assert!(!cfg.view().loop_allow_nsfw);
+    }
+
+    #[test]
+    fn loop_random_fields_roundtrip() {
+        let raw = serde_json::json!({
+            "protocol": "agnes",
+            "loopEnabled": true,
+            "autoRandomOnStart": true,
+            "loopUsePartial": true,
+            "loopAllowNsfw": true,
+            "apiBase": DEFAULT_API_BASE,
+            "outputDir": "",
+            "size": "1K",
+            "ratio": "1:1",
+            "concurrency": 2,
+            "proxyOn": false,
+            "proxyUrl": "",
+            "rememberKey": true,
+            "connectTimeoutSecs": 15,
+            "totalTimeoutSecs": 300
+        });
+        let cfg: ImageQueueConfig = serde_json::from_value(raw).expect("新字段应正常解析");
+        assert!(cfg.loop_use_partial);
+        assert!(cfg.loop_allow_nsfw);
+        let v = cfg.view();
+        assert!(v.loop_use_partial);
+        assert!(v.loop_allow_nsfw);
     }
 
     #[test]

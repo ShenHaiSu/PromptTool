@@ -79,7 +79,7 @@ export const useImageQueueStore = defineStore('imageQueue', () => {
   const dirty = ref(false)
   const keyTouched = ref(false)
   const proxyTouched = ref(false)
-  /** 上次随机的模式（BatchFactory onRandom 写入），饥饿补货沿用。 */
+  /** @deprecated 仅保留兼容：批量工厂 onRandom 仍会写入，但队列备料/补货已改读 config.loopUsePartial/loopAllowNsfw，不再消费此字段。 */
   const lastRandomMode = ref({ usePartial: false, allowNsfw: false })
 
   function markDirty(): void {
@@ -400,9 +400,9 @@ export const useImageQueueStore = defineStore('imageQueue', () => {
   }
 
   /**
-   * 分批入队（每批 100 条，B2 上限 2000）。
-   * 本地先按 irHash/归一化 prompt 去重（与已存在非 Cancelled 任务撞键即跳过）。
-   */
+  * 分批入队（每批 100 条，B2 上限 2000）。
+  * 本地先按 irHash/归一化 prompt 去重（与已存在非 Cancelled 任务撞键即跳过）。
+  */
   async function enqueueBatch(items: IqEnqueueItem[]): Promise<{ enqueued: number; skipped: number }> {
     const seen = new Set<string>()
     for (const [id, t] of tasks.value) {

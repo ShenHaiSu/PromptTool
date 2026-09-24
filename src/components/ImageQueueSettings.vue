@@ -4,6 +4,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { useToast } from '@/composables/useToast'
 import { useImageQueueStore } from '@/stores/imageQueue'
+ import { useAssemblyStore } from '@/stores/assembly'
 import { iqGetResolvedOutputDir, pathGetBases } from '@/lib/imageQueueApi'
 import {
   IQ_DEFAULT_API_BASE,
@@ -29,6 +30,8 @@ const pixelTable = computed(() => {
   return (IQ_SIZES as readonly string[]).map((s) => `${s} ${row[s] ?? '?'}`).join(' · ')
 })
 const socksWarning = computed(() => /^socks5:\/\//i.test(iq.config.proxyUrl.trim()))
+ const assembly = useAssemblyStore()
+ const anchorCount = computed(() => assembly.selectedItems.length)
 const keyPlaceholder = computed(() => {
   // S2 脱敏回显：占位态直接展示后端脱敏串，明文永不进输入框；聚焦即清空待重输。
   if (!iq.keyTouched && iq.config.apiKeyState === 'set') {
@@ -308,6 +311,27 @@ onMounted(async () => {
             />
             <span class="truncate">自动备料</span>
           </label>
+           <label class="flex min-w-0 items-center gap-1.5" title="以画布已选项为锚点，仅随机缺口维度；画布为空时按纯随机降级">
+             <input
+               data-testid="iq-loop-partial"
+               type="checkbox"
+               class="h-3.5 w-3.5 shrink-0 accent-primary"
+               :checked="iq.config.loopUsePartial"
+               @change="iq.config.loopUsePartial = ($event.target as HTMLInputElement).checked; iq.markDirty()"
+             />
+             <span class="truncate">可控随机</span>
+           </label>
+           <label class="flex min-w-0 items-center gap-1.5" title="队列随机是否包含 NSFW 条目">
+             <input
+               data-testid="iq-loop-nsfw"
+               type="checkbox"
+               class="h-3.5 w-3.5 shrink-0 accent-primary"
+               :checked="iq.config.loopAllowNsfw"
+               @change="iq.config.loopAllowNsfw = ($event.target as HTMLInputElement).checked; iq.markDirty()"
+             />
+             <span class="truncate">含NSFW</span>
+           </label>
+           <div v-if="iq.config.loopUsePartial && anchorCount === 0" class="col-span-2 text-[11px] text-amber-600">可控已开但画布为空，将按纯随机补货</div>
           <label class="col-span-2 flex min-w-0 items-center gap-1.5" title="关即纯原图">
             <input
               data-testid="iq-embed-meta"
