@@ -1,4 +1,13 @@
 # Changelog
+ ## need09 — 2026-09-24 · 生图队列独立可控随机（不再依赖批量工厂 lastRandomMode）
+ ### 独立开关（队列配置）
+ - **新增 `loopUsePartial/loopAllowNsfw`**：`ImageQueueConfig` + `IQ_DEFAULT_CONFIG`（默认关）+ `configToPayload/viewToConfig/toLocalCache` 透传与旧包兼容；Rust `config.rs` 同字段 + `#[serde(default)]` + `view()` 透传，旧 `image_queue.json` 缺字段默认 false。
+ - **UI**：`ImageQueueSettings` 运行卡新增`可控随机 iq-loop-partial` + `含NSFW iq-loop-nsfw`；可控开但画布为空时 amber hint。
+ ### 引擎调用
+ - **`imageLoop` 改读队列配置**（`resolveLoopRandomMode`）：备料 `drawStartItems` + 补货 `refillFromEngine` 不再读 `lastRandomMode`（该字段标注 deprecated 保留写入）；备料 confirm 文案带出队列当前模式；空画布降级纯随机 + 10s 节流 toast。
+ ### 测试验收
+ - **前端**：`imageQueue.config` 新增4例（透传/兼容/缓存）+ `imageLoop` 新增4例（只读配置/partial路由/降级警告/关覆盖），全量57文件464用例通过，`vue-tsc --noEmit` 零错误。
+ - **后端**：`cargo test image_queue::config` 17通过（含新增缺字段默认 false + roundtrip).
 ## need08 — 2026-09-23 · 维度右键菜单增强（去Emoji/开关/清空/迁移）
 
 ### 菜单重构（DimensionPanel + need05Position）
