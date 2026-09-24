@@ -1,14 +1,16 @@
-<script setup lang="ts">
-import { ref, onMounted, onBeforeUnmount, computed, watch } from 'vue'
-import DimensionPanel from '@/components/DimensionPanel.vue'
-import BatchFactory from '@/components/BatchFactory.vue'
-import ImageQueuePanel from '@/components/ImageQueuePanel.vue'
-import HistoryPanel from '@/components/HistoryPanel.vue'
-import StatusBar from '@/components/StatusBar.vue'
-import LibraryDialog from '@/components/LibraryDialog.vue'
-import SegmentImportDialog from '@/components/SegmentImportDialog.vue'
-import { useAssemblyStore } from '@/stores/assembly'
-import { useHistoryStore } from '@/stores/history'
+ <script setup lang="ts">
+ import { ref, onMounted, onBeforeUnmount, computed, watch } from 'vue'
+ import DimensionPanel from '@/components/DimensionPanel.vue'
+ import BatchFactory from '@/components/BatchFactory.vue'
+ import ImageQueuePanel from '@/components/ImageQueuePanel.vue'
+ import SingleShotPanel from '@/components/SingleShotPanel.vue'
+ import StatsReportDialog from '@/components/StatsReportDialog.vue'
+ import HistoryPanel from '@/components/HistoryPanel.vue'
+ import StatusBar from '@/components/StatusBar.vue'
+ import LibraryDialog from '@/components/LibraryDialog.vue'
+ import SegmentImportDialog from '@/components/SegmentImportDialog.vue'
+ import { useAssemblyStore } from '@/stores/assembly'
+ import { useHistoryStore } from '@/stores/history'
 import { useSash } from '@/composables/useSash'
 import { appToasts, useToast } from '@/composables/useToast'
 import { useShortcuts } from '@/composables/useShortcuts'
@@ -77,8 +79,8 @@ const showLibraryDialog = ref(false)
 const showSegmentImport = ref(false)
 const dimensionPanelRef = ref<{ refresh: () => Promise<void> } | null>(null)
 const batchFactoryRef = ref<{ refresh: () => Promise<void> } | null>(null)
-// F3 §4：中间栏 Tab 状态（本地 ref，不持久化，默认停留在 prompt）
-const centerTab = ref<'prompt' | 'image'>('prompt')
+ // F3 §4 + need01 需求4：中间栏 Tabs（本地 ref，不持久化，默认停留在 prompt；single 按需挂载）
+ const centerTab = ref<'prompt' | 'image' | 'single'>('prompt')
 
 function syncCountsFromLibrary(): void {
   if (library.dimensions.length) dimCount.value = library.dimensions.length
@@ -239,32 +241,44 @@ onBeforeUnmount(() => {
         class="flex min-h-0 shrink-0 flex-col overflow-hidden bg-background"
         :style="{ width: centerPct }"
       >
-        <!-- F3 §4：中间栏 Tabs（prompt-batch | image-queue），头高约 32px，内容 flex-1 min-h-0 自适应 -->
-        <div class="flex h-8 shrink-0 items-center gap-1 border-b px-2">
-          <button
-            data-testid="center-tab-prompt"
-            class="h-6 rounded px-2 text-xs"
-            :class="centerTab === 'prompt' ? 'bg-accent font-semibold' : 'text-muted-foreground'"
-            @click="centerTab = 'prompt'"
-          >
-            Prompt 批量
-          </button>
-          <button
-            data-testid="center-tab-image"
-            class="h-6 rounded px-2 text-xs"
-            :class="centerTab === 'image' ? 'bg-accent font-semibold' : 'text-muted-foreground'"
-            @click="centerTab = 'image'"
-          >
-            生图队列
-          </button>
-        </div>
-        <div v-show="centerTab === 'prompt'" class="flex min-h-0 flex-1 flex-col overflow-hidden">
-          <BatchFactory ref="batchFactoryRef" @switch-to-image="centerTab = 'image'" />
-        </div>
-        <!-- 生图面板按需挂载：默认停留在 prompt，不预 mount，首屏更快；切 Tab 时 initQueue 回填 -->
-        <div v-if="centerTab === 'image'" class="flex min-h-0 flex-1 flex-col overflow-hidden">
-          <ImageQueuePanel @switch-to-prompt="centerTab = 'prompt'" />
-        </div>
+         <!-- F3 §4 + need01 需求4：中间栏 Tabs（prompt-batch | image-queue | single），头高约 32px -->
+         <div class="flex h-8 shrink-0 items-center gap-1 border-b px-2">
+           <button
+             data-testid="center-tab-prompt"
+             class="h-6 rounded px-2 text-xs"
+             :class="centerTab === 'prompt' ? 'bg-accent font-semibold' : 'text-muted-foreground'"
+             @click="centerTab = 'prompt'"
+           >
+             Prompt 批量
+           </button>
+           <button
+             data-testid="center-tab-image"
+             class="h-6 rounded px-2 text-xs"
+             :class="centerTab === 'image' ? 'bg-accent font-semibold' : 'text-muted-foreground'"
+             @click="centerTab = 'image'"
+           >
+             生图队列
+           </button>
+           <button
+             data-testid="center-tab-single"
+             class="h-6 rounded px-2 text-xs"
+             :class="centerTab === 'single' ? 'bg-accent font-semibold' : 'text-muted-foreground'"
+             @click="centerTab = 'single'"
+           >
+             手动单发
+           </button>
+         </div>
+         <div v-show="centerTab === 'prompt'" class="flex min-h-0 flex-1 flex-col overflow-hidden">
+           <BatchFactory ref="batchFactoryRef" @switch-to-image="centerTab = 'image'" />
+         </div>
+         <!-- 生图面板按需挂载：默认停留在 prompt，不预 mount，首屏更快；切 Tab 时 initQueue 回填 -->
+         <div v-if="centerTab === 'image'" class="flex min-h-0 flex-1 flex-col overflow-hidden">
+           <ImageQueuePanel @switch-to-prompt="centerTab = 'prompt'" />
+         </div>
+         <!-- 需求4 单发面板按需挂载：内存预览不进 Pinia，切 Tab 未保存即丢弃 -->
+         <div v-if="centerTab === 'single'" class="flex min-h-0 flex-1 flex-col overflow-hidden">
+           <SingleShotPanel />
+         </div>
       </section>
 
       <div
@@ -315,7 +329,9 @@ onBeforeUnmount(() => {
       </div>
     </div>
 
-    <!-- 生图任务详情顶层 Dialog（need06）：Teleport 到 body，免虚拟化 transform 裁剪 -->
-    <ImageTaskDetailDialog />
-  </div>
+     <!-- 生图任务详情顶层 Dialog（need06）：Teleport 到 body，免虚拟化 transform 裁剪 -->
+     <ImageTaskDetailDialog />
+     <!-- need01 需求3：报表浮层（运行条 + StatusBar 双入口共用同一 Dialog） -->
+     <StatsReportDialog />
+   </div>
 </template>

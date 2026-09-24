@@ -4,6 +4,7 @@ import { useThemeStore } from '@/stores/theme'
 import { useAssemblyStore } from '@/stores/assembly'
 import { useHistoryStore } from '@/stores/history'
 import { useLibraryStore } from '@/stores/library'
+import { useStatsReport } from '@/composables/useStatsReport'
 
 defineProps<{
   dimCount: number
@@ -16,6 +17,7 @@ const theme = useThemeStore()
 const assembly = useAssemblyStore()
 const history = useHistoryStore()
 const library = useLibraryStore()
+const statsUi = useStatsReport()
 </script>
 
 <template>
@@ -51,6 +53,15 @@ const library = useLibraryStore()
         @click="emit('toggle-library')"
       >
         📚 词库
+      </Button>
+      <Button
+        data-testid="status-stats-report"
+        variant="ghost"
+        size="sm"
+        class="h-6 px-2 text-xs"
+        @click="statsUi.open()"
+      >
+        📊 报表
       </Button>
       <span class="hidden sm:inline">就绪 · Tauri P3</span>
       <Button

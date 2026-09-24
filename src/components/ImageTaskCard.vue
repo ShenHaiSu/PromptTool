@@ -36,34 +36,57 @@ const statusMeta = computed(() => {
   }
 })
 
-async function onCopy(): Promise<void> {
-  const text = props.model.prompt
-  try {
-    await navigator.clipboard.writeText(text)
-  } catch {
-    const ta = document.createElement('textarea')
-    ta.value = text
-    ta.style.position = 'fixed'
-    ta.style.opacity = '0'
-    document.body.appendChild(ta)
-    ta.select()
-    document.execCommand('copy')
-    document.body.removeChild(ta)
-  }
-  push('已复制 prompt', 'success', 1200)
-}
-
-async function onRetry(): Promise<void> {
-  await iq.retry(props.model.id)
-}
-
-async function onRemove(): Promise<void> {
-  await iq.remove(props.model.id)
-}
-
-const elapsedText = computed(() =>
-  props.model.elapsedMs != null ? `${(props.model.elapsedMs / 1000).toFixed(1)}s` : '',
-)
+ async function onCopy(): Promise<void> {
+   const text = props.model.prompt
+   try {
+     await navigator.clipboard.writeText(text)
+   } catch {
+     const ta = document.createElement('textarea')
+     ta.value = text
+     ta.style.position = 'fixed'
+     ta.style.opacity = '0'
+     document.body.appendChild(ta)
+     ta.select()
+     document.execCommand('copy')
+     document.body.removeChild(ta)
+   }
+   push('已复制 prompt', 'success', 1200)
+ }
+ /** 2a 文件名展示：`filename ?? expectedStem + '.…' ?? '…'`（老任务占位）。 */
+ const filenameText = computed(() => {
+   if (props.model.filename) return props.model.filename
+   if (props.model.expectedStem) return `${props.model.expectedStem}.…`
+   return '…'
+ })
+ async function onCopyFilename(): Promise<void> {
+   const text = props.model.filename ?? props.model.expectedStem ?? ''
+   if (!text) {
+     push('暂无文件名', 'warning', 1200)
+     return
+   }
+   try {
+     await navigator.clipboard.writeText(text)
+   } catch {
+     const ta = document.createElement('textarea')
+     ta.value = text
+     ta.style.position = 'fixed'
+     ta.style.opacity = '0'
+     document.body.appendChild(ta)
+     ta.select()
+     document.execCommand('copy')
+     document.body.removeChild(ta)
+   }
+   push('已复制文件名', 'success', 1200)
+ }
+ async function onRetry(): Promise<void> {
+   await iq.retry(props.model.id)
+ }
+ async function onRemove(): Promise<void> {
+   await iq.remove(props.model.id)
+ }
+ const elapsedText = computed(() =>
+   props.model.elapsedMs != null ? `${(props.model.elapsedMs / 1000).toFixed(1)}s` : '',
+ )
 </script>
 
 <template>
@@ -132,8 +155,21 @@ const elapsedText = computed(() =>
         {{ expanded ? '收起' : '展开' }}
       </button>
     </p>
-    <div v-if="model.status === 'failed' && model.error" class="mt-1 text-[11px] text-red-600 dark:text-red-400">
-      {{ model.error }}
-    </div>
-  </Card>
-</template>
+     <div v-if="model.status === 'failed' && model.error" class="mt-1 text-[11px] text-red-600 dark:text-red-400">
+       {{ model.error }}
+     </div>
+     <div
+       :data-testid="`image-task-filename-${model.id}`"
+       class="mt-1 flex min-w-0 items-center gap-1 font-mono text-[11px] text-muted-foreground"
+       :title="filenameText"
+     >
+       <span class="min-w-0 flex-1 truncate">{{ filenameText }}</span>
+       <button
+         :data-testid="`image-task-filename-copy-${model.id}`"
+         class="shrink-0 text-[11px] text-primary"
+         title="复制文件名"
+         @click.stop="onCopyFilename"
+       >复制</button>
+     </div>
+   </Card>
+ </template>

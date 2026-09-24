@@ -20,32 +20,32 @@ const reusing = ref(false)
 export function useImageTaskDialog() {
   const { push } = useToast()
 
-  /** 拉起详情：先开骨架，异步读内嵌 meta；无内嵌/失败则 toast 并自动关闭。 */
-  async function open(detail: ImageTaskView): Promise<void> {
-    task.value = detail
-    opened.value = true
-    embedded.value = null
-    if (!detail.filePath) {
-      push('该任务暂无落盘文件', 'error', 2000)
-      close()
-      return
-    }
-    loading.value = true
-    try {
-      const meta = await readImageMeta(detail.filePath)
-      if (!meta) {
-        push('该图无内嵌参数（可能为旧图/外部图）', 'error', 2500)
-        close()
-        return
-      }
-      embedded.value = meta
-    } catch (e) {
-      push(`读取内嵌参数失败：${String(e)}`, 'error', 2500)
-      close()
-    } finally {
-      loading.value = false
-    }
-  }
+   /** 拉起详情：先开骨架，异步读内嵌 meta；无内嵌/失败则 toast 并自动关闭。2a：无落盘时仍展示文件名三行。 */
+   async function open(detail: ImageTaskView): Promise<void> {
+     task.value = detail
+     opened.value = true
+     embedded.value = null
+     if (!detail.filePath) {
+       // 2a：排队/生成中任务无落盘，保留 Dialog 展示 expectedStem/filename/filePath，不自动关闭。
+       loading.value = false
+       return
+     }
+     loading.value = true
+     try {
+       const meta = await readImageMeta(detail.filePath)
+       if (!meta) {
+         push('该图无内嵌参数（可能为旧图/外部图）', 'error', 2500)
+         close()
+         return
+       }
+       embedded.value = meta
+     } catch (e) {
+       push(`读取内嵌参数失败：${String(e)}`, 'error', 2500)
+       close()
+     } finally {
+       loading.value = false
+     }
+   }
 
   function close(): void {
     opened.value = false

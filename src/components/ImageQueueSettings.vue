@@ -311,6 +311,7 @@ onMounted(async () => {
             />
             <span class="truncate">自动备料</span>
           </label>
+           <div class="col-span-2 text-[11px] text-muted-foreground">运行中每次起生成自动补足到并发量（关即仅饿死补货）</div>
            <label class="flex min-w-0 items-center gap-1.5" title="以画布已选项为锚点，仅随机缺口维度；画布为空时按纯随机降级">
              <input
                data-testid="iq-loop-partial"

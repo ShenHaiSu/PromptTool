@@ -1,20 +1,21 @@
-<script setup lang="ts">
-import { ref, computed, onMounted, onBeforeUnmount, nextTick, watch } from 'vue'
-import { Button } from '@/components/ui/button'
-import { useToast } from '@/composables/useToast'
-import { dbRevealInExplorer } from '@/lib/db'
-import { iqOpenOutputDir } from '@/lib/imageQueueApi'
-import { useImageQueueStore } from '@/stores/imageQueue'
-import { refillFromEngine, cancelRefill, resetRefillCancel, prepareStartQueue } from '@/lib/imageLoop'
-import { useVirtualizer } from '@tanstack/vue-virtual'
-import ImageTaskCard from '@/components/ImageTaskCard.vue'
-import ImageQueueSettings from '@/components/ImageQueueSettings.vue'
-
-const emit = defineEmits<{ (e: 'switch-to-prompt'): void }>()
-
-const iq = useImageQueueStore()
-const { push } = useToast()
-
+ <script setup lang="ts">
+ import { ref, computed, onMounted, onBeforeUnmount, nextTick, watch } from 'vue'
+ import { Button } from '@/components/ui/button'
+ import { useToast } from '@/composables/useToast'
+ import { dbRevealInExplorer } from '@/lib/db'
+ import { iqOpenOutputDir, iqFindByFilename } from '@/lib/imageQueueApi'
+ import { useImageQueueStore } from '@/stores/imageQueue'
+ import { useImageTaskDialog } from '@/composables/useImageTaskDialog'
+ import { useStatsReport } from '@/composables/useStatsReport'
+ import { refillFromEngine, cancelRefill, resetRefillCancel, prepareStartQueue } from '@/lib/imageLoop'
+ import { useVirtualizer } from '@tanstack/vue-virtual'
+ import ImageTaskCard from '@/components/ImageTaskCard.vue'
+ import ImageQueueSettings from '@/components/ImageQueueSettings.vue'
+ const emit = defineEmits<{ (e: 'switch-to-prompt'): void }>()
+ const iq = useImageQueueStore()
+ const { push } = useToast()
+ const taskDialog = useImageTaskDialog()
+ const statsUi = useStatsReport()
  const running = computed(() => iq.isRunning())
  const showSettings = ref(false)
  const statsText = computed(
@@ -72,34 +73,69 @@ async function onOpenOutput(): Promise<void> {
   }
 }
 
-function onGotoPrompt(): void {
-  emit('switch-to-prompt')
-}
-
-// 虚拟化（参数与 BatchFactory 一致：estimateSize 110 / overscan 5 / measureElement）
-const parentRef = ref<HTMLElement | null>(null)
-const totalCount = computed(() => iq.order.length)
-const virtualizer = useVirtualizer(
-  computed(() => ({
-    count: totalCount.value,
-    getScrollElement: () => parentRef.value,
-    estimateSize: () => 110,
-    measureElement: (el) => el.getBoundingClientRect().height,
-    overscan: 5,
-  })),
-)
-const virtualItems = computed(() => virtualizer.value.getVirtualItems())
-const totalSize = computed(() => virtualizer.value.getTotalSize())
-const measureRow = (el: unknown) => {
-  if (el instanceof HTMLElement) virtualizer.value.measureElement(el as never)
-}
-watch(totalCount, async () => {
-  await nextTick()
-})
-
+ function onGotoPrompt(): void {
+   emit('switch-to-prompt')
+ }
+ /** 2b 文件名反查：回车=点击；命中滚动+高亮2s+自动开详情；未命中 toast（注明已清理无法反查）。 */
+ const filenameQuery = ref('')
+ const highlightId = ref<string | null>(null)
+ const searching = ref(false)
+ let highlightTimer: ReturnType<typeof setTimeout> | null = null
+ async function onFindByFilename(): Promise<void> {
+   const q = filenameQuery.value.trim()
+   if (!q) {
+     push('请输入文件名再反查', 'warning', 1500)
+     return
+   }
+   if (searching.value) return
+   searching.value = true
+   try {
+     const found = await iqFindByFilename(q)
+     if (!found) {
+       push('未找到（已清理的任务无法反查）', 'warning', 2500)
+       return
+     }
+     const idx = iq.order.indexOf(found.id)
+     if (idx >= 0) {
+       try {
+         const vz = virtualizer.value as unknown as { scrollToIndex?: (i: number, o?: unknown) => void }
+         if (typeof vz.scrollToIndex === 'function') vz.scrollToIndex(idx, { align: 'center' })
+         else parentRef.value?.scrollTo({ top: Math.max(0, idx * 128 - 100) })
+       } catch { /* 滚动失败不阻断高亮+详情 */ }
+     }
+     if (highlightTimer) clearTimeout(highlightTimer)
+     highlightId.value = found.id
+     highlightTimer = setTimeout(() => { highlightId.value = null }, 2000)
+     await taskDialog.open(found)
+   } catch (err) {
+     push(`反查失败：${err instanceof Error ? err.message : String(err)}`, 'error')
+   } finally {
+     searching.value = false
+   }
+ }
+ // 虚拟化（2a 卡片增高一行：estimateSize 110 → 128 / overscan 5 / measureElement）
+ const parentRef = ref<HTMLElement | null>(null)
+ const totalCount = computed(() => iq.order.length)
+ const virtualizer = useVirtualizer(
+   computed(() => ({
+     count: totalCount.value,
+     getScrollElement: () => parentRef.value,
+     estimateSize: () => 128,
+     measureElement: (el) => el.getBoundingClientRect().height,
+     overscan: 5,
+   })),
+ )
+ const virtualItems = computed(() => virtualizer.value.getVirtualItems())
+ const totalSize = computed(() => virtualizer.value.getTotalSize())
+ const measureRow = (el: unknown) => {
+   if (el instanceof HTMLElement) virtualizer.value.measureElement(el as never)
+ }
+ watch(totalCount, async () => {
+   await nextTick()
+ })
 onMounted(async () => {
   resetRefillCancel()
-  // hungry → F3 补货（store 只 emit，本处订阅后调引擎，保持依赖单向）
+   // hungry → 补货（饥饿兜底与需求1 top-up 共用同一事件；在途合并在 refillFromEngine 内完成）
   iq.onHungry((want) => {
     void refillFromEngine(want)
   })
@@ -109,11 +145,12 @@ onMounted(async () => {
   await iq.initQueue()
 })
 
- onBeforeUnmount(() => {
-   window.removeEventListener('keydown', onSettingsKeydown)
-   cancelRefill()
-   iq.disposeQueue()
- })
+  onBeforeUnmount(() => {
+    window.removeEventListener('keydown', onSettingsKeydown)
+    if (highlightTimer) clearTimeout(highlightTimer)
+    cancelRefill()
+    iq.disposeQueue()
+  })
 </script>
 
 <template>
@@ -145,11 +182,29 @@ onMounted(async () => {
         @click="onEnqueueCurrent"
         >入队当前结果</Button
       >
-      <span data-testid="iq-stats" class="text-[11px] text-muted-foreground">{{ statsText }}</span>
-      <span v-if="iq.stats.consecFail > 0" data-testid="iq-consec" class="text-[11px] text-red-600">
-        连续失败 {{ iq.stats.consecFail }}/5
-      </span>
-      <span v-if="!iq.stats.stopped && iq.stats.consecFail >= 5" class="text-[11px] text-red-600">熔断停止</span>
+        <span data-testid="iq-stats" class="text-[11px] text-muted-foreground">{{ statsText }}</span>
+       <Button data-testid="iq-stats-report" size="sm" variant="outline" class="h-7 text-xs" @click="statsUi.open()">📊 报表</Button>
+        <span v-if="iq.stats.consecFail > 0" data-testid="iq-consec" class="text-[11px] text-red-600">
+          连续失败 {{ iq.stats.consecFail }}/5
+        </span>
+        <span v-if="!iq.stats.stopped && iq.stats.consecFail >= 5" class="text-[11px] text-red-600">熔断停止</span>
+       <div class="flex items-center gap-1">
+         <input
+           v-model="filenameQuery"
+           data-testid="iq-filename-search"
+           placeholder="文件名反查…（支持 stem/全名）"
+           class="h-7 w-44 rounded border bg-background px-2 text-xs outline-none focus:border-primary"
+           @keydown.enter="onFindByFilename"
+         />
+         <Button
+           data-testid="iq-filename-go"
+           size="sm"
+           variant="outline"
+           class="h-7 text-xs"
+           :disabled="searching"
+           @click="onFindByFilename"
+         >{{ searching ? '查找中…' : '反查' }}</Button>
+       </div>
        <button
          class="ml-auto flex items-center gap-1.5 text-[11px]"
          :title="`当前配置：${configSummary}，点击展开配置`"
@@ -186,26 +241,28 @@ onMounted(async () => {
       <span>暂无生图任务 — 先配好密钥，再从批量工厂入队</span>
       <Button size="sm" variant="outline" class="h-7 text-xs" @click="onGotoPrompt">去批量工厂随机</Button>
     </div>
-    <div v-else ref="parentRef" data-testid="iq-virtual-scroll" class="min-h-0 flex-1 overflow-auto border-t">
-      <div :style="{ height: totalSize + 'px', width: '100%', position: 'relative' }">
-        <div
-          v-for="v in virtualItems"
-          :key="String(v.key)"
-          :data-index="v.index"
-          :ref="measureRow"
-          :style="{
-            position: 'absolute',
-            top: '0',
-            left: '0',
-            width: '100%',
-            transform: `translateY(${v.start}px)`,
-          }"
-          class="p-2"
-        >
-          <ImageTaskCard :model="iq.tasks.get(iq.order[v.index]!)!" />
-        </div>
-      </div>
-    </div>
+     <div v-else ref="parentRef" data-testid="iq-virtual-scroll" class="min-h-0 flex-1 overflow-auto border-t">
+       <div :style="{ height: totalSize + 'px', width: '100%', position: 'relative' }">
+         <div
+           v-for="v in virtualItems"
+           :key="String(v.key)"
+           :data-index="v.index"
+           :ref="measureRow"
+           :style="{
+             position: 'absolute',
+             top: '0',
+             left: '0',
+             width: '100%',
+             transform: `translateY(${v.start}px)`,
+           }"
+           class="p-2"
+           :class="highlightId && iq.order[v.index] === highlightId ? 'rounded ring-2 ring-primary' : ''"
+           :data-highlighted="highlightId && iq.order[v.index] === highlightId ? 'true' : undefined"
+         >
+           <ImageTaskCard :model="iq.tasks.get(iq.order[v.index]!)!" />
+         </div>
+       </div>
+     </div>
 
     <!-- 底部栏 -->
     <div class="flex shrink-0 items-center gap-2 border-t px-3 py-2">

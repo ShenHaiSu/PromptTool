@@ -22,24 +22,37 @@ export function shouldRefill(loopEnabled: boolean, running: boolean, want: numbe
   return loopEnabled && running && want > 0
 }
 
-let lastEmptyToastAt = 0
-let lastPartialFallbackToastAt = 0
-let refillCancelled = false
-
-export function cancelRefill(): void {
-  refillCancelled = true
-}
-
-export function resetRefillCancel(): void {
-  refillCancelled = false
-}
-
-/** 供单测重置节流态。 */
-export function __resetLoopTestState(): void {
-  lastEmptyToastAt = 0
-  lastPartialFallbackToastAt = 0
-  refillCancelled = false
-}
+ let lastEmptyToastAt = 0
+ let lastPartialFallbackToastAt = 0
+ let refillCancelled = false
+ /** 需求1 top-up 并发重入合并：在途补货计数 + 挂起缺口（上限并发量）。 */
+ let refillInflight = 0
+ let pendingWant = 0
+ 
+ export function cancelRefill(): void {
+   refillCancelled = true
+   // 停止时丢弃挂起补货（需求1 §2.2：cancel 语义不变，停止后 hungry 到达被丢弃）。
+   pendingWant = 0
+ }
+ 
+ export function resetRefillCancel(): void {
+   refillCancelled = false
+   pendingWant = 0
+ }
+ 
+ /** 供单测重置节流态。 */
+ export function __resetLoopTestState(): void {
+   lastEmptyToastAt = 0
+   lastPartialFallbackToastAt = 0
+   refillCancelled = false
+   refillInflight = 0
+   pendingWant = 0
+ }
+ 
+ /** 单测可见：在途补货数与挂起缺口（需求1 合并重入断言用）。 */
+ export function __refillInflightState(): { inflight: number; pending: number } {
+   return { inflight: refillInflight, pending: pendingWant }
+ }
 
 export interface LoopEnqueueOutcome {
   enqueued: number
@@ -237,52 +250,94 @@ async function drawStartItems(
   return items
 }
 
-/**
- * 饥饿补货：F2 收到 hungry 后调此函数（F3 §3）。
- * 硬性规则：永不写 `batch.results`；`want` 钳制 1..=concurrency；
- * 补货失败静默记日志 + 节流 toast；unmount 时 cancel 标记，完成后丢弃结果。
- */
-export async function refillFromEngine(
-  want: number,
-  opts?: {
-    engine?: EngineFns
-    push?: (msg: string, type?: 'info' | 'success' | 'warning' | 'error', ms?: number) => void
-    usePartial?: boolean
-    allowNsfw?: boolean
-  },
-): Promise<LoopEnqueueOutcome> {
-  const engine: EngineFns = opts?.engine ?? { randomAssembly, partialRandomAssembly }
-  const push = opts?.push ?? useToast().push
-  const iq = useImageQueueStore()
-  const empty: LoopEnqueueOutcome = { enqueued: 0, skipped: 0 }
-  if (refillCancelled) return empty
-  if (!iq.config.loopEnabled) return empty
-  if (!iq.isRunning()) return empty
-  const concurrency = Math.min(8, Math.max(1, Math.round(iq.config.concurrency) || 1))
-  const times = Math.min(Math.max(1, Math.floor(want) || 0), concurrency)
-  if (times <= 0) return empty
-
-  if (!(await ensureLibraryReady())) {
-    toastLibraryEmptyOnce(push)
-    return empty
-  }
-
-  const fallbackMode = resolveLoopRandomMode()
-  const usePartial = opts?.usePartial ?? fallbackMode.usePartial
-  const allowNsfw = opts?.allowNsfw ?? fallbackMode.allowNsfw
-  if (opts?.usePartial === undefined && isPartialFallback(usePartial)) toastPartialFallbackOnce(push)
-  let enqueued = 0
-  let skipped = 0
-  for (let i = 0; i < times; i++) {
-    if (refillCancelled) break
-    // 用当前锁/锚按 BatchFactory 同规则取 1 条（直接调 engine，不经过 batch.results）
-    const drawn = await drawOnePrompt(engine, usePartial, allowNsfw)
-    if (!drawn) continue
-    if (refillCancelled) break
-    const r = await iq.enqueueBatch([{ prompt: drawn.prompt, irHash: drawn.irHash }])
-    enqueued += r.enqueued
-    skipped += r.skipped
-  }
-  if (refillCancelled) return empty
-  return { enqueued, skipped }
-}
+ /** 饥饿补货：F2 收到 hungry 后调此函数（F3 §3；需求1 top-up 复用同一事件）。
+  * 硬性规则：永不写 `batch.results`；`want` 钳制 1..=concurrency；
+  * 补货失败静默记日志 + 节流 toast；unmount 时 cancel 标记，完成后丢弃结果。
+  * 需求1：在途合并——并发 hungry 到达时累加 pendingWant，本轮结束后一次性再补一轮。 */
+ export async function refillFromEngine(
+   want: number,
+   opts?: {
+     engine?: EngineFns
+     push?: (msg: string, type?: 'info' | 'success' | 'warning' | 'error', ms?: number) => void
+     usePartial?: boolean
+     allowNsfw?: boolean
+   },
+ ): Promise<LoopEnqueueOutcome> {
+   const engine: EngineFns = opts?.engine ?? { randomAssembly, partialRandomAssembly }
+   const push = opts?.push ?? useToast().push
+   const iq = useImageQueueStore()
+   const empty: LoopEnqueueOutcome = { enqueued: 0, skipped: 0 }
+   if (refillCancelled) return empty
+   if (!iq.config.loopEnabled) return empty
+   if (!iq.isRunning()) return empty
+   const concurrency = Math.min(8, Math.max(1, Math.round(iq.config.concurrency) || 1))
+   const times = Math.min(Math.max(1, Math.floor(want) || 0), concurrency)
+   if (times <= 0) return empty
+   // 需求1 并发重入合并：上一轮补货在途时累加缺口（上限并发量），本轮结束后一次性再补。
+   if (refillInflight > 0) {
+     pendingWant = Math.min(concurrency, pendingWant + times)
+     return empty
+   }
+   refillInflight += 1
+   try {
+     const total: LoopEnqueueOutcome = { enqueued: 0, skipped: 0 }
+     // 首轮 + 挂起轮（挂起在首轮结束时一次性取走，避免饥饿堆积）。
+     let round = clampRefillTimes(times, concurrency)
+     for (let guard = 0; guard < 8; guard++) {
+       const r = await doRefillRound(engine, push, iq, round, opts)
+       if (refillCancelled) return empty
+       total.enqueued += r.enqueued
+       total.skipped += r.skipped
+       if (pendingWant <= 0 || refillCancelled) break
+       // 取走挂起缺口再补一轮；补货期间新到的 hungry 会重新累加到 pendingWant。
+       round = clampRefillTimes(pendingWant, concurrency)
+       pendingWant = 0
+     }
+     pendingWant = 0
+     return total
+   } finally {
+     refillInflight = Math.max(0, refillInflight - 1)
+     if (refillCancelled) pendingWant = 0
+   }
+ }
+ 
+ /** `want` 钳制 1..=concurrency（与后端 top-up 对称，0/负/NaN 回 0 由调用方丢弃）。 */
+ function clampRefillTimes(want: number, concurrency: number): number {
+   const cap = Math.min(8, Math.max(1, Math.round(concurrency) || 1))
+   const t = Math.floor(want) || 0
+   return Math.min(Math.max(0, t), cap)
+ }
+ 
+ /** 单轮补货内循环（不含在途合并，由 refillFromEngine 调度）。 */
+ async function doRefillRound(
+   engine: EngineFns,
+   push: (msg: string, type?: 'info' | 'success' | 'warning' | 'error', ms?: number) => void,
+   iq: ReturnType<typeof useImageQueueStore>,
+   times: number,
+   opts?: { usePartial?: boolean; allowNsfw?: boolean },
+ ): Promise<LoopEnqueueOutcome> {
+   const empty: LoopEnqueueOutcome = { enqueued: 0, skipped: 0 }
+   if (times <= 0) return empty
+   if (!(await ensureLibraryReady())) {
+     toastLibraryEmptyOnce(push)
+     return empty
+   }
+   const fallbackMode = resolveLoopRandomMode()
+   const usePartial = opts?.usePartial ?? fallbackMode.usePartial
+   const allowNsfw = opts?.allowNsfw ?? fallbackMode.allowNsfw
+   if (opts?.usePartial === undefined && isPartialFallback(usePartial)) toastPartialFallbackOnce(push)
+   let enqueued = 0
+   let skipped = 0
+   for (let i = 0; i < times; i++) {
+     if (refillCancelled) break
+     // 用当前锁/锚按 BatchFactory 同规则取 1 条（直接调 engine，不经过 batch.results）
+     const drawn = await drawOnePrompt(engine, usePartial, allowNsfw)
+     if (!drawn) continue
+     if (refillCancelled) break
+     const r = await iq.enqueueBatch([{ prompt: drawn.prompt, irHash: drawn.irHash }])
+     enqueued += r.enqueued
+     skipped += r.skipped
+   }
+   if (refillCancelled) return empty
+   return { enqueued, skipped }
+ }

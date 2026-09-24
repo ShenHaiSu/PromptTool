@@ -10,20 +10,24 @@ import { IQ_DEFAULT_CONFIG, IQ_KEY_SET_PLACEHOLDER } from './imageQueue'
 
 export type ImageTaskStatus = 'queued' | 'running' | 'succeeded' | 'failed' | 'cancelled'
 
-export interface ImageTaskView {
-  id: string
-  prompt: string
-  irHash?: string | null
-  size: string
-  ratio: string
-  status: ImageTaskStatus
-  imageUrl?: string | null
-  filePath?: string | null
-  elapsedMs?: number | null
-  error?: string | null
-  retryCount: number
-  createdAt: number
-}
+ export interface ImageTaskView {
+   id: string
+   prompt: string
+   irHash?: string | null
+   size: string
+   ratio: string
+   status: ImageTaskStatus
+   imageUrl?: string | null
+   filePath?: string | null
+   elapsedMs?: number | null
+   error?: string | null
+   retryCount: number
+   createdAt: number
+   /** 2a 预占 stem（无扩展名），入队即有；老任务为 null。 */
+   expectedStem?: string | null
+   /** 2a 落盘确定名（含扩展名与碰撞 -N 后缀）；完成前为 null。 */
+   filename?: string | null
+ }
 
 export interface IqStats {
   queued: number
@@ -174,13 +178,17 @@ export async function iqClearFinished(): Promise<number> {
   return invoke<number>('iq_clear_finished')
 }
 
-export async function iqList(
-  offset = 0,
-  limit = 100,
-  status?: string,
-): Promise<{ total: number; items: ImageTaskView[] }> {
-  return invoke<{ total: number; items: ImageTaskView[] }>('iq_list', { offset, limit, status: status ?? null })
-}
+ export async function iqList(
+   offset = 0,
+   limit = 100,
+   status?: string,
+ ): Promise<{ total: number; items: ImageTaskView[] }> {
+   return invoke<{ total: number; items: ImageTaskView[] }>('iq_list', { offset, limit, status: status ?? null })
+ }
+ /** 2b 文件名反查：支持 stem/全名/大小写/绝对路径/-1 后缀；找不到返回 null（不抛错）。 */
+ export async function iqFindByFilename(query: string): Promise<ImageTaskView | null> {
+   return invoke<ImageTaskView | null>('iq_find_by_filename', { query })
+ }
 
 /** 内嵌生图参数（need06）：与旧 sidecar 同构，无内嵌返回 null。 */
 export interface EmbeddedImageMeta {
