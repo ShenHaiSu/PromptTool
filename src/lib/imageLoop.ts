@@ -1,5 +1,5 @@
 /**
- * 随机联动与无限循环（need05 F3 §1–§3）
+ * 随机联动与无限循环（need05 F3 §1–§3 + 队列独立随机）
  * 联动方向：批量工厂（生产 prompt）→ 生图队列（消费 prompt）；饥饿补货反向调用引擎。
  * 归属此处而不进 store，保持 store 瘦；store 只负责入队/启停/事件。
  */
@@ -23,6 +23,7 @@ export function shouldRefill(loopEnabled: boolean, running: boolean, want: numbe
 }
 
 let lastEmptyToastAt = 0
+let lastPartialFallbackToastAt = 0
 let refillCancelled = false
 
 export function cancelRefill(): void {
@@ -36,6 +37,7 @@ export function resetRefillCancel(): void {
 /** 供单测重置节流态。 */
 export function __resetLoopTestState(): void {
   lastEmptyToastAt = 0
+  lastPartialFallbackToastAt = 0
   refillCancelled = false
 }
 
@@ -100,6 +102,33 @@ export async function drawOnePrompt(
   return { prompt, irHash: ir.hash() }
 }
 
+/** 队列随机模式来源：只读队列独立配置，不再读批量工厂 lastRandomMode。 */
+export function resolveLoopRandomMode(): { usePartial: boolean; allowNsfw: boolean } {
+  const iq = useImageQueueStore()
+  return { usePartial: iq.config.loopUsePartial === true, allowNsfw: iq.config.loopAllowNsfw === true }
+}
+
+/** 可控已开但画布为空时节流 toast（10s 一次），提示已按纯随机降级。 */
+export function toastPartialFallbackOnce(
+  push: (msg: string, type?: 'info' | 'success' | 'warning' | 'error', ms?: number) => void,
+): void {
+  const now = Date.now()
+  if (now - lastPartialFallbackToastAt > 10_000) {
+    lastPartialFallbackToastAt = now
+    push('可控随机已开但画布为空，已按纯随机补货', 'warning')
+  }
+}
+
+/** 可控开关开但无锚点时是否会降级（供调用方决定是否提示）。 */
+export function isPartialFallback(usePartial: boolean): boolean {
+  if (!usePartial) return false
+  try {
+    return useAssemblyStore().selectedItems.length === 0
+  } catch {
+    return false
+  }
+}
+
 /** 词库为空时节流 toast（10s 一次），供补货与备料共用。 */
 export function toastLibraryEmptyOnce(
   push: (msg: string, type?: 'info' | 'success' | 'warning' | 'error', ms?: number) => void,
@@ -155,8 +184,11 @@ export async function prepareStartQueue(opts?: {
     let items: DrawnPrompt[]
     let usedExisting = false
     if (batch.results.length > 0) {
+      const mode = resolveLoopRandomMode()
+      const modeText = `可控${mode.usePartial ? '开' : '关'}·含NSFW${mode.allowNsfw ? '开' : '关'}`
       const useIt = confirm(
-        `批量工厂有 ${batch.results.length} 条随机结果，是否直接入队？\n【确定】使用现有结果 【取消】重新随机 ${count} 条`,
+        `批量工厂有 ${batch.results.length} 条随机结果，是否直接入队？
+【确定】使用现有结果 【取消】按队列配置（${modeText}）重新随机 ${count} 条`,
       )
       if (useIt) {
         items = batch.results.map((r) => ({ prompt: r.finalPrompt, irHash: r.hash }))
@@ -195,10 +227,11 @@ async function drawStartItems(
     toastLibraryEmptyOnce(push)
     return null
   }
-  const iq = useImageQueueStore()
+  const mode = resolveLoopRandomMode()
+  if (isPartialFallback(mode.usePartial)) toastPartialFallbackOnce(push)
   const items: DrawnPrompt[] = []
   for (let i = 0; i < count; i++) {
-    const d = await drawOnePrompt(engine, iq.lastRandomMode.usePartial, iq.lastRandomMode.allowNsfw)
+    const d = await drawOnePrompt(engine, mode.usePartial, mode.allowNsfw)
     if (d) items.push(d)
   }
   return items
@@ -234,8 +267,10 @@ export async function refillFromEngine(
     return empty
   }
 
-  const usePartial = opts?.usePartial ?? iq.lastRandomMode.usePartial
-  const allowNsfw = opts?.allowNsfw ?? iq.lastRandomMode.allowNsfw
+  const fallbackMode = resolveLoopRandomMode()
+  const usePartial = opts?.usePartial ?? fallbackMode.usePartial
+  const allowNsfw = opts?.allowNsfw ?? fallbackMode.allowNsfw
+  if (opts?.usePartial === undefined && isPartialFallback(usePartial)) toastPartialFallbackOnce(push)
   let enqueued = 0
   let skipped = 0
   for (let i = 0; i < times; i++) {
