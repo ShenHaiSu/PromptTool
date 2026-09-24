@@ -114,21 +114,29 @@ pub fn run() {
             commands::path_resolve::path_migrate_status,
             commands::translation::db_batch_update_display_names,
             commands::translation::db_batch_update_display_names_text,
-            // --- Need05: 生图队列 10 命令 + need06 解析入口 1 命令 ---
-            commands::image_queue::queue::iq_set_config,
-            commands::image_queue::queue::iq_get_config,
-            commands::image_queue::queue::iq_test_connection,
-            commands::image_queue::queue::iq_enqueue,
-            commands::image_queue::queue::iq_start,
-            commands::image_queue::queue::iq_stop,
-            commands::image_queue::queue::iq_retry,
-            commands::image_queue::queue::iq_remove,
-            commands::image_queue::queue::iq_clear_finished,
-            commands::image_queue::queue::iq_list,
-            commands::image_queue::queue::iq_read_image_meta,
-            commands::image_queue::queue::iq_get_resolved_output_dir,
-            commands::image_queue::queue::iq_open_output_dir
-        ])
-        .run(tauri::generate_context!())
+             // --- Need05: 生图队列 10 命令 + need06 解析入口 1 命令 ---
+             commands::image_queue::queue::iq_set_config,
+             commands::image_queue::queue::iq_get_config,
+             commands::image_queue::queue::iq_test_connection,
+             commands::image_queue::queue::iq_enqueue,
+             commands::image_queue::queue::iq_start,
+             commands::image_queue::queue::iq_stop,
+             commands::image_queue::queue::iq_retry,
+             commands::image_queue::queue::iq_remove,
+             commands::image_queue::queue::iq_clear_finished,
+              commands::image_queue::queue::iq_list,
+              commands::image_queue::queue::iq_find_by_filename,
+              commands::image_queue::queue::iq_read_image_meta,
+              commands::image_queue::queue::iq_get_resolved_output_dir,
+              commands::image_queue::queue::iq_open_output_dir,
+             // --- need01 需求3：报表 3 命令（主库 ledger，只读看板） ---
+             commands::meta::stats_ledger_summary,
+             commands::meta::stats_ledger_daily,
+             commands::meta::stats_ledger_hourly,
+             // --- need01 需求4：手动单发 2 命令（内存预览 + 点存落盘） ---
+             commands::image_queue::queue::iq_generate_one_preview,
+             commands::image_queue::queue::iq_save_preview
+         ])
+         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

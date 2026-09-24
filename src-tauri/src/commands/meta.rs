@@ -1,10 +1,10 @@
-use std::collections::VecDeque;
-use std::path::{Path, PathBuf};
-use std::sync::Mutex;
-
-use rusqlite::Connection;
-use serde::Serialize;
-use tauri::{AppHandle, Manager};
+ use std::collections::VecDeque;
+ use std::path::{Path, PathBuf};
+ use std::sync::Mutex;
+ use chrono::TimeZone;
+ use rusqlite::Connection;
+ use serde::Serialize;
+ use tauri::{AppHandle, Manager};
 
 const META_SCHEMA_SQL: &str = include_str!("../../resources/meta_schema.sql");
 
@@ -672,7 +672,173 @@ pub struct TempCarryResult {
     pub payload_json: Option<String>,
 }
 
-// ------------------------------------------------------------------
+ // ------------------------------------------------------------------
+ // need01 需求3：生成统计 ledger（主库持久化，跨业务库）
+ // ------------------------------------------------------------------
+
+ #[derive(Debug, Clone)]
+ pub struct LedgerEntry {
+     pub id: String,
+     pub task_id: String,
+     pub source: String,
+     pub status: String,
+     pub elapsed_ms: i64,
+     pub size: String,
+     pub ratio: String,
+     pub pixels: i64,
+     pub filename: Option<String>,
+     pub prompt_hash: Option<String>,
+     pub created_at: i64,
+     pub finished_at: i64,
+ }
+
+ pub const LEDGER_DDL: &str = "CREATE TABLE IF NOT EXISTS generation_ledger (id TEXT PRIMARY KEY, task_id TEXT NOT NULL UNIQUE, source TEXT NOT NULL DEFAULT 'queue' CHECK (source IN ('queue','single')), status TEXT NOT NULL CHECK (status IN ('succeeded','failed','cancelled')), elapsed_ms INTEGER NOT NULL DEFAULT 0, size TEXT NOT NULL DEFAULT '1K', ratio TEXT NOT NULL DEFAULT '1:1', pixels INTEGER NOT NULL DEFAULT 0, filename TEXT, prompt_hash TEXT, created_at INTEGER NOT NULL, finished_at INTEGER NOT NULL); CREATE INDEX IF NOT EXISTS idx_ledger_finished ON generation_ledger(finished_at); CREATE INDEX IF NOT EXISTS idx_ledger_status ON generation_ledger(status); CREATE INDEX IF NOT EXISTS idx_ledger_source ON generation_ledger(source);";
+
+ pub fn ensure_ledger_table(conn: &Connection) -> Result<(), String> {
+     conn.execute_batch(LEDGER_DDL).map_err(|e| e.to_string())?;
+     Ok(())
+ }
+
+ pub fn record_ledger(db_path: &Path, e: LedgerEntry) -> Result<(), String> {
+     let conn = Connection::open(db_path).map_err(|e| e.to_string())?;
+     conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;").map_err(|e| e.to_string())?;
+     ensure_ledger_table(&conn)?;
+     let source = if e.source == "single" { "single" } else { "queue" };
+     let status = match e.status.as_str() {
+         "succeeded" | "failed" | "cancelled" => e.status.as_str(),
+         _ => return Err(format!("非法 ledger status：{}", e.status)),
+     };
+     conn.execute(
+         "INSERT OR IGNORE INTO generation_ledger(id, task_id, source, status, elapsed_ms, size, ratio, pixels, filename, prompt_hash, created_at, finished_at) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12)",
+         rusqlite::params![e.id, e.task_id, source, status, e.elapsed_ms, e.size, e.ratio, e.pixels, e.filename, e.prompt_hash, e.created_at, e.finished_at],
+     ).map_err(|e| e.to_string())?;
+     Ok(())
+ }
+
+ fn parse_ymd(s: &str) -> Result<chrono::NaiveDate, String> {
+     chrono::NaiveDate::parse_from_str(s.trim(), "%Y-%m-%d").map_err(|_| format!("日期格式须为 yyyy-MM-dd：{}", s))
+ }
+
+ fn day_start_ts(date: chrono::NaiveDate) -> i64 {
+     date.and_hms_opt(0, 0, 0).map(|d| chrono::Local.from_local_datetime(&d).single().map(|l| l.timestamp()).unwrap_or(d.and_utc().timestamp())).unwrap_or(0)
+ }
+
+ #[derive(Debug, Serialize, Clone)]
+ #[serde(rename_all = "camelCase")]
+ pub struct LedgerSummary {
+     pub total: i64,
+     pub succeeded: i64,
+     pub failed: i64,
+     pub pixels: i64,
+     pub avg_elapsed_ms: f64,
+ }
+
+ #[derive(Debug, Serialize, Clone)]
+ #[serde(rename_all = "camelCase")]
+ pub struct LedgerDailyRow {
+     pub day: String,
+     pub total: i64,
+     pub succeeded: i64,
+     pub pixels: i64,
+ }
+
+ #[derive(Debug, Serialize, Clone)]
+ #[serde(rename_all = "camelCase")]
+ pub struct LedgerHourlyRow {
+     pub hour: i64,
+     pub total: i64,
+     pub succeeded: i64,
+     pub pixels: i64,
+ }
+
+ fn open_meta_ledger(app: &AppHandle) -> Result<Connection, String> {
+     let state = app.state::<AppState>();
+     let conn = Connection::open(&state.default_db).map_err(|e| e.to_string())?;
+     conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;").map_err(|e| e.to_string())?;
+     ensure_ledger_table(&conn)?;
+     Ok(conn)
+ }
+
+ #[tauri::command]
+ pub fn stats_ledger_summary(app: AppHandle, from: String, to: String) -> Result<LedgerSummary, String> {
+     let conn = open_meta_ledger(&app)?;
+     let d_from = parse_ymd(&from)?;
+     let d_to = parse_ymd(&to)?;
+     let start = day_start_ts(d_from);
+     let end = day_start_ts(d_to) + 86400;
+     let (total, succeeded, failed, pixels): (i64, i64, i64, Option<i64>) = conn.query_row(
+         "SELECT COUNT(*), SUM(CASE WHEN status='succeeded' THEN 1 ELSE 0 END), SUM(CASE WHEN status='failed' THEN 1 ELSE 0 END), SUM(pixels) FROM generation_ledger WHERE finished_at >= ?1 AND finished_at < ?2",
+         rusqlite::params![start, end],
+         |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+     ).map_err(|e| e.to_string())?;
+     let avg: Option<f64> = conn.query_row(
+         "SELECT AVG(elapsed_ms) FROM generation_ledger WHERE finished_at >= ?1 AND finished_at < ?2 AND status='succeeded'",
+         rusqlite::params![start, end],
+         |r| r.get(0),
+     ).map_err(|e| e.to_string())?;
+     Ok(LedgerSummary { total, succeeded, failed, pixels: pixels.unwrap_or(0), avg_elapsed_ms: avg.unwrap_or(0.0) })
+ }
+
+ #[tauri::command]
+ pub fn stats_ledger_daily(app: AppHandle, from: String, to: String) -> Result<Vec<LedgerDailyRow>, String> {
+     let conn = open_meta_ledger(&app)?;
+     let d_from = parse_ymd(&from)?;
+     let d_to = parse_ymd(&to)?;
+     let start = day_start_ts(d_from);
+     let end = day_start_ts(d_to) + 86400;
+     let mut map: std::collections::HashMap<String, (i64, i64, i64)> = std::collections::HashMap::new();
+     {
+         let mut stmt = conn.prepare(
+             "SELECT date(finished_at, 'unixepoch', 'localtime') AS d, COUNT(*), SUM(CASE WHEN status='succeeded' THEN 1 ELSE 0 END), SUM(pixels) FROM generation_ledger WHERE finished_at >= ?1 AND finished_at < ?2 GROUP BY d",
+         ).map_err(|e| e.to_string())?;
+         let rows = stmt.query_map(rusqlite::params![start, end], |r| {
+             let d: String = r.get(0)?;
+             let c: i64 = r.get(1)?;
+             let s: i64 = r.get(2)?;
+             let p: Option<i64> = r.get(3)?;
+             Ok((d, c, s, p.unwrap_or(0)))
+         }).map_err(|e| e.to_string())?;
+         for r in rows { let (d, c, s, p) = r.map_err(|e| e.to_string())?; map.insert(d, (c, s, p)); }
+     }
+     let mut out = Vec::new();
+     let mut cur = d_from;
+     let mut guard = 0;
+     while cur <= d_to && guard < 366 {
+         let key = cur.format("%Y-%m-%d").to_string();
+         let (t, s, p) = map.get(&key).cloned().unwrap_or((0, 0, 0));
+         out.push(LedgerDailyRow { day: key, total: t, succeeded: s, pixels: p });
+         cur = cur.succ_opt().unwrap_or(cur);
+         guard += 1;
+     }
+     Ok(out)
+ }
+
+ #[tauri::command]
+ pub fn stats_ledger_hourly(app: AppHandle, day: String) -> Result<Vec<LedgerHourlyRow>, String> {
+     let conn = open_meta_ledger(&app)?;
+     let d = parse_ymd(&day)?;
+     let start = day_start_ts(d);
+     let end = start + 86400;
+     let mut buckets = vec![(0i64, 0i64, 0i64); 24];
+     {
+         let mut stmt = conn.prepare(
+             "SELECT CAST(strftime('%H', finished_at, 'unixepoch', 'localtime') AS INTEGER) AS h, COUNT(*), SUM(CASE WHEN status='succeeded' THEN 1 ELSE 0 END), SUM(pixels) FROM generation_ledger WHERE finished_at >= ?1 AND finished_at < ?2 GROUP BY h",
+         ).map_err(|e| e.to_string())?;
+         let rows = stmt.query_map(rusqlite::params![start, end], |r| {
+             let h: i64 = r.get(0)?;
+             let c: i64 = r.get(1)?;
+             let s: i64 = r.get(2)?;
+             let p: Option<i64> = r.get(3)?;
+             Ok((h, c, s, p.unwrap_or(0)))
+         }).map_err(|e| e.to_string())?;
+         for r in rows {
+             let (h, c, s, p) = r.map_err(|e| e.to_string())?;
+             if (0..24).contains(&h) { buckets[h as usize] = (c, s, p); }
+         }
+     }
+     Ok(buckets.into_iter().enumerate().map(|(h, (t, s, p))| LedgerHourlyRow { hour: h as i64, total: t, succeeded: s, pixels: p }).collect())
+ }
+ 
 // Auto-migrate first business
 // ------------------------------------------------------------------
 
@@ -956,24 +1122,64 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    #[test]
-    fn b9_migrate_failure_keeps_db_and_bak() {
-        // 失败注入：缺 db_registry 表 → SELECT 失败 → Err，且原库不动、有 .bak
-        let dir = unique_temp_dir("migfail");
-        let db = dir.join("Default.db");
-        let conn = Connection::open(&db).unwrap();
-        conn.execute_batch("CREATE TABLE app_settings(k TEXT PRIMARY KEY, v TEXT NOT NULL);").unwrap();
-        conn.execute("INSERT INTO app_settings(k,v) VALUES ('max_active','2')", []).unwrap();
-        drop(conn);
-        let before = std::fs::read(&db).unwrap();
-        let res = migrate_path_schema_v2(&db);
-        assert!(res.is_err(), "缺表应迁移失败");
-        let after = std::fs::read(&db).unwrap();
-        assert_eq!(before, after, "原库必须 unchanged");
-        let bak_exists = std::fs::read_dir(&dir).unwrap().any(|e| {
-            e.map(|x| x.file_name().to_string_lossy().contains(".bak-")).unwrap_or(false)
-        });
-        assert!(bak_exists);
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-}
+     #[test]
+     fn b9_migrate_failure_keeps_db_and_bak() {
+         // 失败注入：缺 db_registry 表 → SELECT 失败 → Err，且原库不动、有 .bak
+         let dir = unique_temp_dir("migfail");
+         let db = dir.join("Default.db");
+         let conn = Connection::open(&db).unwrap();
+         conn.execute_batch("CREATE TABLE app_settings(k TEXT PRIMARY KEY, v TEXT NOT NULL);").unwrap();
+         conn.execute("INSERT INTO app_settings(k,v) VALUES ('max_active','2')", []).unwrap();
+         drop(conn);
+         let before = std::fs::read(&db).unwrap();
+         let res = migrate_path_schema_v2(&db);
+         assert!(res.is_err(), "缺表应迁移失败");
+         let after = std::fs::read(&db).unwrap();
+         assert_eq!(before, after, "原库必须 unchanged");
+         let bak_exists = std::fs::read_dir(&dir).unwrap().any(|e| {
+             e.map(|x| x.file_name().to_string_lossy().contains(".bak-")).unwrap_or(false)
+         });
+         assert!(bak_exists);
+         let _ = std::fs::remove_dir_all(&dir);
+     }
+     #[test]
+     fn ledger_table_created_and_insert_ignore() {
+         // 需求3：主库 ledger 建表幂等 + INSERT OR IGNORE 防重试 double-count。
+         let dir = unique_temp_dir("ledger");
+         let db = dir.join("Default.db");
+         init_default_db(&db).unwrap();
+         let conn = Connection::open(&db).unwrap();
+         let n: i64 = conn.query_row("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='generation_ledger'", [], |r| r.get(0)).unwrap();
+         assert_eq!(n, 1);
+         drop(conn);
+         let mk = |task_id: &str| LedgerEntry {
+             id: uuid::Uuid::new_v4().to_string(), task_id: task_id.to_string(), source: "queue".to_string(),
+             status: "succeeded".to_string(), elapsed_ms: 1200, size: "1K".to_string(), ratio: "1:1".to_string(),
+             pixels: 1048576, filename: Some("a.png".to_string()), prompt_hash: Some("abcd1234".to_string()),
+             created_at: 1_758_000_000, finished_at: 1_758_000_100,
+         };
+         record_ledger(&db, mk("task-1")).unwrap();
+         // 同 task_id 重复记账被 IGNORE（仍 1 行）。
+         record_ledger(&db, mk("task-1")).unwrap();
+         record_ledger(&db, LedgerEntry { task_id: "single:xxx".to_string(), source: "single".to_string(), status: "succeeded".to_string(), ..mk("single:xxx") }).unwrap();
+         let conn2 = Connection::open(&db).unwrap();
+         let c: i64 = conn2.query_row("SELECT COUNT(*) FROM generation_ledger", [], |r| r.get(0)).unwrap();
+         assert_eq!(c, 2);
+         let px: i64 = conn2.query_row("SELECT SUM(pixels) FROM generation_ledger", [], |r| r.get(0)).unwrap();
+         assert_eq!(px, 2097152);
+         let _ = std::fs::remove_dir_all(&dir);
+     }
+     #[test]
+     fn ledger_rejects_bad_status() {
+         let dir = unique_temp_dir("ledger_bad");
+         let db = dir.join("Default.db");
+         init_default_db(&db).unwrap();
+         let e = LedgerEntry {
+             id: "x".to_string(), task_id: "t".to_string(), source: "queue".to_string(), status: "bogus".to_string(),
+             elapsed_ms: 0, size: "1K".to_string(), ratio: "1:1".to_string(), pixels: 0, filename: None,
+             prompt_hash: None, created_at: 1, finished_at: 2,
+         };
+         assert!(record_ledger(&db, e).is_err());
+         let _ = std::fs::remove_dir_all(&dir);
+     }
+ }

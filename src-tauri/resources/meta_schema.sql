@@ -23,8 +23,25 @@ CREATE TABLE IF NOT EXISTS app_settings (
     v TEXT NOT NULL
 );
 
-CREATE TABLE IF NOT EXISTS temp_carry (
-    id           TEXT PRIMARY KEY,
-    payload_json TEXT NOT NULL,
-    updated_at   INTEGER NOT NULL
-);
+ CREATE TABLE IF NOT EXISTS temp_carry (
+     id           TEXT PRIMARY KEY,
+     payload_json TEXT NOT NULL,
+     updated_at   INTEGER NOT NULL
+ );
+ CREATE TABLE IF NOT EXISTS generation_ledger (
+   id          TEXT PRIMARY KEY,
+   task_id     TEXT NOT NULL UNIQUE,
+   source      TEXT NOT NULL DEFAULT 'queue' CHECK (source IN ('queue','single')),
+   status      TEXT NOT NULL CHECK (status IN ('succeeded','failed','cancelled')),
+   elapsed_ms  INTEGER NOT NULL DEFAULT 0,
+   size        TEXT NOT NULL DEFAULT '1K',
+   ratio       TEXT NOT NULL DEFAULT '1:1',
+   pixels      INTEGER NOT NULL DEFAULT 0,
+   filename    TEXT,
+   prompt_hash TEXT,
+   created_at  INTEGER NOT NULL,
+   finished_at INTEGER NOT NULL
+ );
+ CREATE INDEX IF NOT EXISTS idx_ledger_finished ON generation_ledger(finished_at);
+ CREATE INDEX IF NOT EXISTS idx_ledger_status ON generation_ledger(status);
+ CREATE INDEX IF NOT EXISTS idx_ledger_source ON generation_ledger(source);
