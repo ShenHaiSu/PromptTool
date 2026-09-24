@@ -16,13 +16,15 @@ function cfg(patch: Partial<ImageQueueConfig> = {}): ImageQueueConfig {
 }
 
 describe('IQ_DEFAULT_CONFIG', () => {
-  it('size=1K ratio=1:1 concurrency=2 loop/备料开关全关', () => {
-    expect(IQ_DEFAULT_CONFIG.size).toBe('1K')
-    expect(IQ_DEFAULT_CONFIG.ratio).toBe('1:1')
-    expect(IQ_DEFAULT_CONFIG.concurrency).toBe(2)
-    expect(IQ_DEFAULT_CONFIG.loopEnabled).toBe(false)
-    expect(IQ_DEFAULT_CONFIG.autoRandomOnStart).toBe(false)
-  })
+   it('size=1K ratio=1:1 concurrency=2 loop/备料开关全关', () => {
+     expect(IQ_DEFAULT_CONFIG.size).toBe('1K')
+     expect(IQ_DEFAULT_CONFIG.ratio).toBe('1:1')
+     expect(IQ_DEFAULT_CONFIG.concurrency).toBe(2)
+     expect(IQ_DEFAULT_CONFIG.loopEnabled).toBe(false)
+     expect(IQ_DEFAULT_CONFIG.autoRandomOnStart).toBe(false)
+     expect(IQ_DEFAULT_CONFIG.loopUsePartial).toBe(false)
+     expect(IQ_DEFAULT_CONFIG.loopAllowNsfw).toBe(false)
+   })
 })
 
 describe('validateIqConfig', () => {
@@ -99,6 +101,27 @@ describe('__SET__ 占位语义', () => {
     expect(c.apiKeyMasked).toBe('')
   })
 })
+ describe('队列独立随机字段', () => {
+   it('configToPayload 透传 loopUsePartial/loopAllowNsfw', () => {
+     const p = configToPayload(cfg({ loopUsePartial: true, loopAllowNsfw: true }), false, false)
+     expect(p.loopUsePartial).toBe(true)
+     expect(p.loopAllowNsfw).toBe(true)
+   })
+   it('viewToConfig 缺字段时默认 false（兼容旧后端/旧缓存）', () => {
+     const c = viewToConfig({ apiKey: '' } as never)
+     expect(c.loopUsePartial).toBe(false)
+     expect(c.loopAllowNsfw).toBe(false)
+   })
+   it('viewToConfig 透传新字段真值', () => {
+     const c = viewToConfig({ apiKey: '', loopUsePartial: true, loopAllowNsfw: true } as never)
+     expect(c.loopUsePartial).toBe(true)
+     expect(c.loopAllowNsfw).toBe(true)
+   })
+   it('toLocalCache 携带新字段（随其余非敏感配置持久化）', () => {
+     const cache = toLocalCache(cfg({ loopUsePartial: true, loopAllowNsfw: false }))
+     expect(cache).toMatchObject({ loopUsePartial: true, loopAllowNsfw: false })
+   })
+ })
 
 describe('localStorage 脱敏', () => {
   it('缓存串不含 key 明文', () => {

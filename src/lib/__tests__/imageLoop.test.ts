@@ -19,7 +19,7 @@ import { useAssemblyStore } from '@/stores/assembly'
 import { useBatchStore } from '@/stores/batch'
 import { useImageQueueStore } from '@/stores/imageQueue'
 import { useLibraryStore } from '@/stores/library'
-import { __resetLoopTestState, refillFromEngine, prepareStartQueue } from '@/lib/imageLoop'
+ import { __resetLoopTestState, refillFromEngine, prepareStartQueue, resolveLoopRandomMode, isPartialFallback } from '@/lib/imageLoop'
 
 function seedRunningLoop(concurrency = 2): void {
   const iq = useImageQueueStore()
@@ -174,3 +174,67 @@ describe('词库空节流 toast', () => {
     expect(pushes.filter((m) => m.includes('词库为空'))).toHaveLength(1)
   })
 })
+ describe('队列独立随机模式（不再读 lastRandomMode）', () => {
+   function seedAnchor(): void {
+     const assembly = useAssemblyStore()
+     assembly.selectedItems = [
+       { module: { id: 'm1', dimensionId: 'd1', contentEn: 'white shirt', displayName: 'ws', weight: 1, isEnabled: true, isNsfw: false, usageCount: 0, dimensionKey: 'top' }, locked: false },
+     ]
+   }
+   it('resolveLoopRandomMode 只读队列配置', () => {
+     const iq = useImageQueueStore()
+     iq.config.loopUsePartial = true
+     iq.config.loopAllowNsfw = true
+     iq.lastRandomMode = { usePartial: false, allowNsfw: false }
+     expect(resolveLoopRandomMode()).toEqual({ usePartial: true, allowNsfw: true })
+     iq.config.loopUsePartial = false
+     iq.config.loopAllowNsfw = false
+     iq.lastRandomMode = { usePartial: true, allowNsfw: true }
+     expect(resolveLoopRandomMode()).toEqual({ usePartial: false, allowNsfw: false })
+   })
+   it('队列可控开+有锚点 → 补货走 partial', async () => {
+     seedRunningLoop()
+     seedLibrary()
+     seedAnchor()
+     const iq = useImageQueueStore()
+     iq.config.loopUsePartial = true
+     iq.lastRandomMode = { usePartial: false, allowNsfw: false }
+     const engine = {
+       randomAssembly: vi.fn().mockReturnValue([{ segments: [], hash: () => 'h-random' }]),
+       partialRandomAssembly: vi.fn().mockReturnValue([{ segments: [], hash: () => 'h-partial' }]),
+     }
+     await refillFromEngine(1, { engine: engine as never, push: (() => {}) as never })
+     expect(engine.partialRandomAssembly).toHaveBeenCalledTimes(1)
+     expect(engine.randomAssembly).not.toHaveBeenCalled()
+   })
+   it('队列可控开+无锚点 → 降级 random 并警告一次', async () => {
+     seedRunningLoop()
+     seedLibrary()
+     const iq = useImageQueueStore()
+     iq.config.loopUsePartial = true
+     expect(isPartialFallback(true)).toBe(true)
+     const pushes: string[] = []
+     const engine = {
+       randomAssembly: vi.fn().mockImplementation(() => [{ segments: [], hash: () => `h${Math.random()}` }]),
+       partialRandomAssembly: vi.fn().mockReturnValue([]),
+     }
+     await refillFromEngine(1, { engine: engine as never, push: ((m: string) => { pushes.push(m) }) as never })
+     expect(engine.randomAssembly).toHaveBeenCalled()
+     expect(pushes.filter((m) => m.includes('画布为空')).length).toBeGreaterThan(0)
+   })
+   it('队列可控关 → 补货走 random（即使 lastRandomMode 为可控）', async () => {
+     seedRunningLoop()
+     seedLibrary()
+     seedAnchor()
+     const iq = useImageQueueStore()
+     iq.config.loopUsePartial = false
+     iq.lastRandomMode = { usePartial: true, allowNsfw: false }
+     const engine = {
+       randomAssembly: vi.fn().mockReturnValue([{ segments: [], hash: () => 'h-random' }]),
+       partialRandomAssembly: vi.fn().mockReturnValue([{ segments: [], hash: () => 'h-partial' }]),
+     }
+     await refillFromEngine(1, { engine: engine as never, push: (() => {}) as never })
+     expect(engine.randomAssembly).toHaveBeenCalled()
+     expect(engine.partialRandomAssembly).not.toHaveBeenCalled()
+   })
+ })
