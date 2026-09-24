@@ -15,14 +15,29 @@ const emit = defineEmits<{ (e: 'switch-to-prompt'): void }>()
 const iq = useImageQueueStore()
 const { push } = useToast()
 
-const running = computed(() => iq.isRunning())
-const showSettings = ref(false)
+ const running = computed(() => iq.isRunning())
+ const showSettings = ref(false)
+ const statsText = computed(
+   () => `成功 ${iq.stats.succeeded} · 失败 ${iq.stats.failed} · 排队 ${iq.stats.queued} · 运行 ${iq.stats.running}/并发${iq.config.concurrency}`,
+ )
+ const keyMissing = computed(() => iq.config.apiKeyState === 'unset' && !iq.config.apiKey)
+ const keyDot = computed(() => (iq.config.apiKeyState === 'set' || iq.config.apiKey ? '●' : '○'))
+ const keyDotClass = computed(() => (iq.config.apiKeyState === 'set' || iq.config.apiKey ? 'text-green-600' : 'text-amber-600'))
+ const configSummary = computed(() => `${iq.config.size}·${iq.config.ratio}·并发${iq.config.concurrency}`)
 
-const statsText = computed(
-  () =>
-    `成功 ${iq.stats.succeeded} · 失败 ${iq.stats.failed} · 排队 ${iq.stats.queued} · 运行 ${iq.stats.running}/并发${iq.config.concurrency}`,
-)
-const keyMissing = computed(() => iq.config.apiKeyState === 'unset' && !iq.config.apiKey)
+ function requestCloseSettings(): void {
+   if (iq.dirty && !window.confirm('配置未保存，确定关闭？')) return
+   showSettings.value = false
+ }
+
+ function onSettingsKeydown(e: KeyboardEvent): void {
+   if (e.key === 'Escape') requestCloseSettings()
+ }
+
+ watch(showSettings, (open) => {
+   if (open) window.addEventListener('keydown', onSettingsKeydown)
+   else window.removeEventListener('keydown', onSettingsKeydown)
+ })
 
 async function onStart(): Promise<void> {
   const prep = await prepareStartQueue()
@@ -94,10 +109,11 @@ onMounted(async () => {
   await iq.initQueue()
 })
 
-onBeforeUnmount(() => {
-  cancelRefill()
-  iq.disposeQueue()
-})
+ onBeforeUnmount(() => {
+   window.removeEventListener('keydown', onSettingsKeydown)
+   cancelRefill()
+   iq.disposeQueue()
+ })
 </script>
 
 <template>
@@ -134,18 +150,24 @@ onBeforeUnmount(() => {
         连续失败 {{ iq.stats.consecFail }}/5
       </span>
       <span v-if="!iq.stats.stopped && iq.stats.consecFail >= 5" class="text-[11px] text-red-600">熔断停止</span>
-      <button class="ml-auto text-[11px] text-primary" @click="showSettings = !showSettings">
-        {{ showSettings ? '收起配置' : '展开配置' }}
-      </button>
-      <!-- 配置浮层：悬浮于任务流上方，不挤压队列 -->
-      <div
-        v-if="showSettings"
-        class="absolute inset-x-0 top-full z-20 max-h-[60vh] overflow-auto border-y bg-background shadow-lg"
-      >
-        <ImageQueueSettings />
-      </div>
-    </div>
-    <div v-if="showSettings" class="fixed inset-0 z-10" @click="showSettings = false"></div>
+       <button
+         class="ml-auto flex items-center gap-1.5 text-[11px]"
+         :title="`当前配置：${configSummary}，点击展开配置`"
+         @click="showSettings = !showSettings"
+       >
+         <span :class="keyDotClass" title="API 密钥状态">{{ keyDot }}</span>
+         <span class="rounded border bg-muted/50 px-1.5 py-px text-muted-foreground">{{ configSummary }}</span>
+         <span class="text-primary">{{ showSettings ? '收起配置' : '展开配置' }}</span>
+       </button>
+       <!-- 配置浮层：右对齐窄卡，不再全宽压住任务流 -->
+       <div
+         v-if="showSettings"
+         class="absolute right-0 top-full z-20 max-h-[70vh] w-[min(640px,94%)] overflow-auto rounded-xl border bg-background shadow-xl"
+       >
+         <ImageQueueSettings />
+       </div>
+     </div>
+     <div v-if="showSettings" class="fixed inset-0 z-10" @click="requestCloseSettings"></div>
 
     <div v-if="keyMissing" class="mx-3 mb-1 rounded border border-amber-500/30 bg-amber-50 px-2 py-1 text-[11px] text-amber-700 dark:bg-amber-950 dark:text-amber-300">
       未设置 API 密钥
