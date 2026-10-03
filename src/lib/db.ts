@@ -251,6 +251,20 @@ export async function dbMigrateDimension(args: { dimensionId: string }): Promise
 }
 
 // ------------------------------------------------------------------
+// 清空维度：单事务软删该维度全部存活 modules（原子，见施工文档）
+// ------------------------------------------------------------------
+export type ClearDimensionReport = {
+  cleared: number
+}
+
+export async function dbClearDimension(args: { dimensionId: string }): Promise<ClearDimensionReport> {
+  const r = await invoke<{ cleared: number }>('db_clear_dimension', {
+    dimensionId: args.dimensionId,
+  })
+  return { cleared: r.cleared }
+}
+
+// ------------------------------------------------------------------
 // Assemblies
 // ------------------------------------------------------------------
 export async function dbSaveAssembly(

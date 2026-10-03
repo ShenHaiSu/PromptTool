@@ -9,7 +9,7 @@ import { useAssemblyStore } from '@/stores/assembly'
 import { useHistoryStore } from '@/stores/history'
  import {
    dbCreateDimension, dbUpdateDimension,
-   dbCreateModule, dbUpdateModule, dbSoftDeleteModule, dbMigrateDimension,
+   dbCreateModule, dbUpdateModule, dbSoftDeleteModule, dbClearDimension, dbMigrateDimension,
  } from '@/lib/db'
 import DimensionEditDialog from '@/components/DimensionEditDialog.vue'
 import ModuleEditDialog from '@/components/ModuleEditDialog.vue'
@@ -618,7 +618,6 @@ function onGenerateFromMenu(): void {
  const clearTarget = ref<Dimension | null>(null)
  const clearConfirmOpen = ref(false)
  const clearing = ref(false)
- const clearProgress = ref({ done: 0, total: 0 })
  const clearAgreed = ref(false)
  const clearCount = computed(() => (clearTarget.value ? (modulesByDim.value[clearTarget.value.id]?.length ?? 0) : 0))
  const clearSelectedK = computed(() => {
@@ -630,7 +629,6 @@ function onGenerateFromMenu(): void {
  function openClearConfirm(dim: Dimension): void {
    clearTarget.value = dim
    clearAgreed.value = false
-   clearProgress.value = { done: 0, total: 0 }
    clearConfirmOpen.value = true
  }
  function closeClearConfirm(): void {
@@ -645,37 +643,30 @@ function onGenerateFromMenu(): void {
    const groupedKey = (grouped[dim.id] ? dim.id : (grouped[dim.key] ? dim.key : dim.id))
    const list = [...(modulesByDim.value[dim.id] ?? [])]
    if (list.length === 0) { clearConfirmOpen.value = false; return }
-   const snapshot = [...list]
-   const total = list.length
    clearing.value = true
-   clearProgress.value = { done: 0, total }
+   // 乐观：一次置空该维度分组（单次赋值、单次渲染）；后端原子命令失败则用快照恢复
+   const snapshot = [...list]
+   const g0 = library.modulesByDim as Record<string, Module[]>
+   library.modulesByDim = { ...g0, [groupedKey]: [] }
    try {
-     for (let i = 0; i < list.length; i++) {
-       const m = list[i]!
-       await dbSoftDeleteModule(m.id)
-       clearProgress.value = { done: i + 1, total }
-       const g = library.modulesByDim as Record<string, Module[]>
-       g[groupedKey] = (g[groupedKey] ?? []).filter((x) => x.id !== m.id)
-       library.modulesByDim = { ...g }
-     }
+     const r = await dbClearDimension({ dimensionId: dim.id })
+     const ids = new Set(list.map((m) => m.id))
+     const linked = assembly.selectedItems.filter((it) => it.module.dimensionId === dim.id || ids.has(it.module.id))
+     for (const it of linked) assembly.removeModule(it.module.id)
+     emit(LIBRARY_CHANGED, { source: 'dimension-panel', op: 'clear-dimension' })
+     await library.fetchAll()
+     push(`已清空维度「${dim.nameCn}」，删除 ${r.cleared} 条` + (linked.length ? `，移出已选 ${linked.length} 条` : ''), 'success', 2200)
+     clearConfirmOpen.value = false
    } catch (e) {
      const g2 = library.modulesByDim as Record<string, Module[]>
      g2[groupedKey] = snapshot
      library.modulesByDim = { ...g2 }
      emit(LIBRARY_CHANGED, { source: 'dimension-panel', op: 'clear-dimension-failed' })
      await library.fetchAll()
-     push(`清空中断：已删除 ${clearProgress.value.done} 条，剩余已恢复显示，请重试…`, 'error')
+     push(`清空失败：${String(e)}，未删除任何条目`, 'error')
+   } finally {
      clearing.value = false
-     return
    }
-   const ids = new Set(list.map((m) => m.id))
-   const linked = assembly.selectedItems.filter((it) => it.module.dimensionId === dim.id || ids.has(it.module.id))
-   for (const it of linked) assembly.removeModule(it.module.id)
-   emit(LIBRARY_CHANGED, { source: 'dimension-panel', op: 'clear-dimension' })
-   await library.fetchAll()
-   push(`已清空维度「${dim.nameCn}」，删除 ${total} 条` + (linked.length ? `，移出已选 ${linked.length} 条` : ''), 'success', 2200)
-   clearConfirmOpen.value = false
-   clearing.value = false
  }
 
  // —— Need08: 迁移维度（归档 + 原位重建，走 Rust 事务命令，见 05 §6） ——
@@ -1132,7 +1123,7 @@ defineExpose({ refresh, keyword, allowNsfw, dimensions, modulesByDim, onCreateDi
              data-testid="clear-confirm-btn"
              :disabled="!clearAgreed || clearing"
              @click="doClearDimension"
-           >{{ clearing ? `清空中… ${clearProgress.done}/${clearProgress.total}` : `确认清空（${clearCount} 条）` }}</Button>
+          >{{ clearing ? `清空中…` : `确认清空（${clearCount} 条）` }}</Button>
          </div>
        </div>
      </div>

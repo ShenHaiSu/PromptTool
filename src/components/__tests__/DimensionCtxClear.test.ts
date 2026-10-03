@@ -18,6 +18,7 @@ const dbMocks = vi.hoisted(() => ({
   dbCreateModule: vi.fn().mockResolvedValue({ id: 'm_new', dimensionId: 'd_pose', contentEn: 'new', displayName: '新', weight: 1, isEnabled: true, isNsfw: false, usageCount: 0 }),
   dbUpdateModule: vi.fn().mockResolvedValue(undefined),
   dbSoftDeleteModule: vi.fn().mockResolvedValue(undefined),
+  dbClearDimension: vi.fn().mockResolvedValue({ cleared: 2 }),
   dbMigrateDimension: vi.fn(),
 }))
 
@@ -53,6 +54,7 @@ describe('Need08 — 清空维度', () => {
     Object.defineProperty(navigator, 'clipboard', { value: { writeText: vi.fn().mockResolvedValue(undefined) }, configurable: true })
     dbMocks.dbGetAllModulesGrouped.mockResolvedValue({ pose: [...POSE_MODS] })
     dbMocks.dbSoftDeleteModule.mockResolvedValue(undefined)
+    dbMocks.dbClearDimension.mockResolvedValue({ cleared: 2 })
   })
 
   it('1. 空维度清空/迁移 disabled 且 title 提示', async () => {
@@ -86,7 +88,7 @@ describe('Need08 — 清空维度', () => {
     w.unmount()
   })
 
-  it('3. 勾选后确认调 dbSoftDeleteModule N 次并关闭对话框', async () => {
+  it('3. 勾选后确认调 dbClearDimension 1 次并关闭对话框', async () => {
     const { w } = mountPanel()
     await flush(w)
     await openMenu(w)
@@ -100,9 +102,9 @@ describe('Need08 — 清空维度', () => {
     await w.vm.$nextTick()
     await new Promise((r) => setTimeout(r, 50))
     await w.vm.$nextTick()
-    expect(dbMocks.dbSoftDeleteModule).toHaveBeenCalledTimes(2)
-    expect(dbMocks.dbSoftDeleteModule).toHaveBeenCalledWith('m_pose_1')
-    expect(dbMocks.dbSoftDeleteModule).toHaveBeenCalledWith('m_pose_2')
+    expect(dbMocks.dbClearDimension).toHaveBeenCalledTimes(1)
+    expect(dbMocks.dbClearDimension).toHaveBeenCalledWith({ dimensionId: 'd_pose' })
+    expect(dbMocks.dbSoftDeleteModule).not.toHaveBeenCalled()
     expect(document.body.querySelector('[data-testid="clear-confirm-dialog"]')).toBeFalsy()
     // 强刷一次（fetchAll → dbGetAllModulesGrouped 被再次调用）
     expect(dbMocks.dbGetAllModulesGrouped.mock.calls.length).toBeGreaterThan(1)
@@ -128,8 +130,8 @@ describe('Need08 — 清空维度', () => {
     w.unmount()
   })
 
-  it('5. 中途失败对话框保持打开并触发 fetchAll 对齐后端', async () => {
-    dbMocks.dbSoftDeleteModule.mockRejectedValueOnce(new Error('db locked'))
+  it('5. 失败时对话框保持打开并触发 fetchAll 对齐后端', async () => {
+    dbMocks.dbClearDimension.mockRejectedValueOnce(new Error('db locked'))
     const { w } = mountPanel()
     await flush(w)
     await openMenu(w)
