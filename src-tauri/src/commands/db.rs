@@ -752,6 +752,53 @@ pub fn db_soft_delete_dimension(app: AppHandle, id: String) -> Result<(), String
      })
  }
 
+ #[derive(Debug, Serialize, Deserialize, Clone)]
+ #[serde(rename_all = "camelCase")]
+ pub struct ClearDimensionReport {
+     pub cleared: i64,
+ }
+
+ /// 清空维度：单事务软删该维度全部存活 modules，原子返回 cleared 条数。
+ fn clear_dimension_on_conn(
+     conn: &Connection,
+     dimension_id: &str,
+ ) -> Result<ClearDimensionReport, String> {
+     let src = read_migrate_src(conn, dimension_id)?;
+     conn.execute("BEGIN IMMEDIATE", []).map_err(|e| e.to_string())?;
+     let work: Result<i64, String> = (|| {
+         let ts = now_ts();
+         conn.execute(
+             "UPDATE modules SET is_deleted=1, updated_at=?1 WHERE dimension_id=?2 AND is_deleted=0",
+             params![ts, src.id],
+         )
+         .map_err(|e| e.to_string())?;
+         let cleared = conn.changes() as i64;
+         if cleared == 0 {
+             return Err("空维度无需清空".to_string());
+         }
+         Ok(cleared)
+     })();
+     match work {
+         Ok(cleared) => {
+             conn.execute("COMMIT", []).map_err(|e| e.to_string())?;
+             Ok(ClearDimensionReport { cleared })
+         }
+         Err(e) => {
+             let _ = conn.execute("ROLLBACK", []);
+             Err(e)
+         }
+     }
+ }
+
+ #[tauri::command]
+ pub fn db_clear_dimension(
+     app: AppHandle,
+     dimension_id: String,
+ ) -> Result<ClearDimensionReport, String> {
+     let conn = open_conn(&app)?;
+     clear_dimension_on_conn(&conn, &dimension_id)
+ }
+
  #[tauri::command]
  pub fn db_migrate_dimension(
      app: AppHandle,
@@ -2919,6 +2966,65 @@ mod tests {
          assert_eq!(r2.moved, 1);
          assert_ne!(r1.archive.key, r2.archive.key);
          assert_eq!(r2.fresh.key, "pose");
+         drop(conn);
+         let _ = std::fs::remove_dir_all(&dir);
+     }
+
+     #[test]
+     fn clear_dimension_happy_path() {
+         let (conn, dir) = temp_db("clear_ok");
+         seed_migrate_src(&conn, "d_pose", "pose", 3);
+         seed_migrate_src(&conn, "d_other", "other", 1);
+         let r = clear_dimension_on_conn(&conn, "d_pose").unwrap();
+         assert_eq!(r.cleared, 3);
+         let n: i64 = conn
+             .query_row(
+                 "SELECT COUNT(*) FROM modules WHERE dimension_id='d_pose' AND is_deleted=0",
+                 [],
+                 |r| r.get(0),
+             )
+             .unwrap();
+         assert_eq!(n, 0);
+         let n_other: i64 = conn
+             .query_row(
+                 "SELECT COUNT(*) FROM modules WHERE dimension_id='d_other' AND is_deleted=0",
+                 [],
+                 |r| r.get(0),
+             )
+             .unwrap();
+         assert_eq!(n_other, 1);
+         drop(conn);
+         let _ = std::fs::remove_dir_all(&dir);
+     }
+
+     #[test]
+     fn clear_dimension_empty_rejected() {
+         let (conn, dir) = temp_db("clear_empty");
+         seed_migrate_src(&conn, "d_empty", "empty_dim", 0);
+         let err = clear_dimension_on_conn(&conn, "d_empty").unwrap_err();
+         assert_eq!(err, "空维度无需清空");
+         drop(conn);
+         let _ = std::fs::remove_dir_all(&dir);
+     }
+
+     #[test]
+     fn clear_dimension_missing_rejected() {
+         let (conn, dir) = temp_db("clear_missing");
+         seed_migrate_src(&conn, "d_pose", "pose", 1);
+         let err = clear_dimension_on_conn(&conn, "d_nope").unwrap_err();
+         assert!(err.contains("不存在或已删除"), "unexpected: {}", err);
+         drop(conn);
+         let _ = std::fs::remove_dir_all(&dir);
+     }
+
+     #[test]
+     fn clear_dimension_second_round_empty() {
+         let (conn, dir) = temp_db("clear_twice");
+         seed_migrate_src(&conn, "d_pose", "pose", 2);
+         let r1 = clear_dimension_on_conn(&conn, "d_pose").unwrap();
+         assert_eq!(r1.cleared, 2);
+         let err = clear_dimension_on_conn(&conn, "d_pose").unwrap_err();
+         assert_eq!(err, "空维度无需清空");
          drop(conn);
          let _ = std::fs::remove_dir_all(&dir);
      }
