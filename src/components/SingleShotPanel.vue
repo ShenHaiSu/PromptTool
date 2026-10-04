@@ -1,16 +1,19 @@
-<script setup lang="ts">
-import { ref, computed, onMounted, onBeforeUnmount, watch } from 'vue'
-import { Button } from '@/components/ui/button'
-import { useToast } from '@/composables/useToast'
-import { useImageQueueStore } from '@/stores/imageQueue'
-import { dbRevealInExplorer } from '@/lib/db'
-import { iqGetResolvedOutputDir } from '@/lib/imageQueueApi'
-import { iqGenerateOnePreview, iqSavePreview } from '@/lib/statsApi'
-import { IQ_SIZES, IQ_RATIOS } from '@/lib/imageQueue'
-import { useImageZoomPan } from '@/composables/useImageZoomPan'
-
-const iq = useImageQueueStore()
-const { push } = useToast()
+ <script setup lang="ts">
+ import { ref, computed, onMounted, onBeforeUnmount, watch } from 'vue'
+ import { Button } from '@/components/ui/button'
+ import { useToast } from '@/composables/useToast'
+ import { useImageQueueStore } from '@/stores/imageQueue'
+ import { useConnectionProfileStore } from '@/stores/connectionProfile'
+ import { isConnectionReady } from '@/lib/connectionProfile'
+ import { dbRevealInExplorer } from '@/lib/db'
+ import { iqGetResolvedOutputDir } from '@/lib/imageQueueApi'
+ import { iqGenerateOnePreview, iqSavePreview } from '@/lib/statsApi'
+ import { IQ_SIZES, IQ_RATIOS } from '@/lib/imageQueue'
+ import { useImageZoomPan } from '@/composables/useImageZoomPan'
+ 
+ const iq = useImageQueueStore()
+ const conn = useConnectionProfileStore()
+ const { push } = useToast()
 
 const DRAFT_KEY = 'singleShotDraft'
 /** 上下分栏比例持久化（与主三栏 useSash 的 pmf:sash 相互独立） */
@@ -24,17 +27,26 @@ const size = ref('1K')
 const ratio = ref('1:1')
 const outputDir = ref('')
 const outputPlaceholder = ref('')
-const generating = ref(false)
-const saving = ref(false)
-const preview = ref<{ b64: string; mime: string; elapsedMs: number } | null>(null)
-const saved = ref<{ filename: string; filePath: string } | null>(null)
-
-const previewUrl = computed(() =>
-  preview.value ? `data:${preview.value.mime};base64,${preview.value.b64}` : '',
-)
-const canGenerate = computed(() => !generating.value && prompt.value.trim().length > 0)
-const canSave = computed(() => !saving.value && !generating.value && preview.value != null)
-const promptOverlong = computed(() => prompt.value.trim().length > 4000)
+ const generating = ref(false)
+ const saving = ref(false)
+ const preview = ref<{ b64: string; mime: string; elapsedMs: number } | null>(null)
+ const saved = ref<{ filename: string; filePath: string } | null>(null)
+ // need01-02A: 失败态（重试入口）+ 密钥缺失引导
+ const lastError = ref<string | null>(null)
+ const failedAt = ref<string | null>(null)
+ 
+ const previewUrl = computed(() =>
+   preview.value ? `data:${preview.value.mime};base64,${preview.value.b64}` : '',
+ )
+ const canGenerate = computed(() => !generating.value && prompt.value.trim().length > 0)
+ const canSave = computed(() => !saving.value && !generating.value && preview.value != null)
+ const promptOverlong = computed(() => prompt.value.trim().length > 4000)
+ /** 连接就绪：连接域或队列域任一就绪即放行（过渡期双写，兼容旧单测直设 iq）。 */
+ const keyMissing = computed(() => {
+   const connReady = isConnectionReady(conn.profile)
+   const iqReady = iq.config.apiKeyState === 'set' || Boolean(iq.config.apiKey)
+   return !(connReady || iqReady)
+ })
 
 /* ---------------- 上下分栏（可拖动分隔条） ---------------- */
 
@@ -138,67 +150,98 @@ function restoreDraft(): void {
 
 watch([prompt, size, ratio], () => persistDraft())
 
-async function onGenerate(): Promise<void> {
-  const p = prompt.value.trim()
-  if (!p) {
-    push('prompt 不能为空', 'warning')
-    return
-  }
-  if (p.length > 4000) {
-    push('prompt 超 4000 字符已截断', 'warning')
-  }
-  if (iq.config.apiKeyState === 'unset' && !iq.config.apiKey) {
-    push('未设置 API 密钥', 'warning')
-    return
-  }
-  if (generating.value) return
-  generating.value = true
-  saved.value = null
-  try {
-    const r = await iqGenerateOnePreview(p.slice(0, 4000), size.value, ratio.value)
-    preview.value = { b64: r.imageBase64, mime: r.mime, elapsedMs: r.elapsedMs }
-    // 新图：回到适应窗口
-    zoom.reset()
-    zoom.fit()
-    push(`单发预览已生成（${(r.elapsedMs / 1000).toFixed(1)}s，未落盘）`, 'success', 2000)
-  } catch (err) {
-    push(`单发失败：${err instanceof Error ? err.message : String(err)}`, 'error')
-  } finally {
-    generating.value = false
-  }
-}
-
-async function onSave(): Promise<void> {
-  if (!preview.value) {
-    push('先生成预览再保存', 'warning')
-    return
-  }
-  if (saving.value) return
-  saving.value = true
-  try {
-    const r = await iqSavePreview(
-      preview.value.b64,
-      prompt.value.trim().slice(0, 4000),
-      size.value,
-      ratio.value,
-      outputDir.value.trim() || undefined,
-    )
-    saved.value = r
-    push(`已落盘 ${r.filename}（已计入统计）`, 'success', 2500)
-  } catch (err) {
-    push(`保存失败：${err instanceof Error ? err.message : String(err)}`, 'error')
-  } finally {
-    saving.value = false
-  }
-}
-
-function onReset(): void {
-  // 重来：丢弃内存预览（不落盘），保留 prompt 草稿
-  preview.value = null
-  saved.value = null
-  zoom.reset()
-  push('已重来（预览已丢弃）', 'info', 1200)
-}
+ async function onGenerate(): Promise<void> {
+   const p = prompt.value.trim()
+   if (!p) {
+     push('prompt 不能为空', 'warning')
+     return
+   }
+   if (p.length > 4000) {
+     push('prompt 超 4000 字符已截断', 'warning')
+   }
+   if (keyMissing.value) {
+     push('未设置 API 密钥', 'warning')
+     return
+   }
+   if (generating.value) return
+   generating.value = true
+   lastError.value = null
+   saved.value = null
+   try {
+     const r = await iqGenerateOnePreview(p.slice(0, 4000), size.value, ratio.value)
+     // need01-02A3 单实例：先释放旧 base64 再赋值，避免两份大图并存
+     releasePreview(true)
+     preview.value = { b64: r.imageBase64, mime: r.mime, elapsedMs: r.elapsedMs }
+     // 超限提醒（b64 > 25MB 仍可看但建议先保存）
+     try {
+       if (r.imageBase64.length > 25 * 1024 * 1024) {
+         push('预览较大（>25MB），建议先保存再继续生成', 'warning')
+       }
+     } catch { /* ignore */ }
+     // 新图：回到适应窗口
+     zoom.reset()
+     zoom.fit()
+     push(`单发预览已生成（${(r.elapsedMs / 1000).toFixed(1)}s，未落盘）`, 'success', 2000)
+   } catch (err) {
+     const msg = err instanceof Error ? err.message : String(err)
+     lastError.value = msg
+     try { failedAt.value = new Date().toLocaleTimeString() } catch { failedAt.value = '' }
+     push(`单发失败：${msg}`, 'error')
+   } finally {
+     generating.value = false
+   }
+ }
+ 
+ /** 失败重试：清错后重调 onGenerate（沿用截断后 prompt + size/ratio）。 */
+ async function onRetry(): Promise<void> {
+   if (generating.value) return
+   lastError.value = null
+   await onGenerate()
+ }
+ 
+ /**
+  * need01-02A3 大图内存释放：置空 + zoom.reset()，onReset/切 Tab/卸载统一走此。
+  * silent=true 时新生成前释放不 toast。
+  */
+ function releasePreview(silent = false): void {
+   preview.value = null
+   try { zoom.reset() } catch { /* ignore */ }
+   if (!silent) {
+     saved.value = null
+   }
+ }
+ 
+ async function onSave(): Promise<void> {
+   if (!preview.value) {
+     push('先生成预览再保存', 'warning')
+     return
+   }
+   if (saving.value) return
+   saving.value = true
+   try {
+     const r = await iqSavePreview(
+       preview.value.b64,
+       prompt.value.trim().slice(0, 4000),
+       size.value,
+       ratio.value,
+       outputDir.value.trim() || undefined,
+     )
+     saved.value = r
+     push(`已落盘 ${r.filename}（已计入统计）`, 'success', 2500)
+   } catch (err) {
+     push(`保存失败：${err instanceof Error ? err.message : String(err)}`, 'error')
+   } finally {
+     saving.value = false
+   }
+ }
+ 
+ function onReset(): void {
+   // 重来：丢弃内存预览（不落盘），保留 prompt 草稿
+   releasePreview()
+   saved.value = null
+   lastError.value = null
+   push('已重来（预览已丢弃）', 'info', 1200)
+ }
 
 async function onBrowseDir(): Promise<void> {
   try {
@@ -268,25 +311,29 @@ async function onCopyFilename(): Promise<void> {
   push('已复制文件名', 'success', 1200)
 }
 
-onMounted(async () => {
-  restoreDraft()
-  loadVSplit()
-  if (!size.value) size.value = iq.config.size || '1K'
-  if (!ratio.value) ratio.value = iq.config.ratio || '1:1'
-  try {
-    outputPlaceholder.value = await iqGetResolvedOutputDir()
-  } catch { /* ignore */ }
-})
-
-onBeforeUnmount(() => {
-  // 未保存切 Tab/关闭：内存丢弃（base64 不持久化），prompt 草稿已留 localStorage
-  preview.value = null
-  window.removeEventListener('pointermove', onSashPointerMove)
-  window.removeEventListener('pointerup', onSashPointerUp)
-  if (sashRafId != null) { cancelAnimationFrame(sashRafId); sashRafId = null }
-  document.body.style.userSelect = ''
-  document.body.style.cursor = ''
-})
+ onMounted(async () => {
+   restoreDraft()
+   loadVSplit()
+   if (!size.value) size.value = iq.config.size || '1K'
+   if (!ratio.value) ratio.value = iq.config.ratio || '1:1'
+   // need01-02B：直进单发即加载连接，不再依赖队列面板 onMounted
+   if (!conn.loaded) {
+     try { await conn.loadConnection() } catch { /* 降级：回落 iq */ }
+   }
+   try {
+     outputPlaceholder.value = await iqGetResolvedOutputDir()
+   } catch { /* ignore */ }
+ })
+ 
+ onBeforeUnmount(() => {
+   // 未保存切 Tab/关闭：内存丢弃（base64 不持久化），prompt 草稿已留 localStorage
+   releasePreview()
+   window.removeEventListener('pointermove', onSashPointerMove)
+   window.removeEventListener('pointerup', onSashPointerUp)
+   if (sashRafId != null) { cancelAnimationFrame(sashRafId); sashRafId = null }
+   document.body.style.userSelect = ''
+   document.body.style.cursor = ''
+ })
 </script>
 
 <template>
@@ -402,31 +449,53 @@ onBeforeUnmount(() => {
         <button data-testid="single-shot-open-original" class="rounded px-1.5 py-0.5 hover:bg-accent" title="打开原图" @click="onOpenOriginal">原图</button>
       </div>
 
-      <!-- 图片：以容器中心为原点，transform 缩放平移 -->
-      <img
-        v-if="preview"
-        data-testid="single-shot-preview"
-        :src="previewUrl"
-        alt="单发预览"
-        class="max-h-full max-w-full select-none"
-        :style="{
-          transform: `translate3d(${zoom.transform.value.x}px, ${zoom.transform.value.y}px, 0) scale(${zoom.transform.value.scale})`,
-          transformOrigin: 'center center',
-          willChange: 'transform',
-        }"
-        draggable="false"
-        @load="zoom.onImageLoad($event.target as HTMLImageElement)"
-      />
-
-      <!-- 空态 -->
-      <div
-        v-else
-        data-testid="single-shot-empty"
-        class="flex flex-col items-center justify-center gap-1 p-6 text-center text-xs text-muted-foreground"
-      >
-        <div>暂无预览 — 填写 prompt 后点「生成」</div>
-        <div class="text-[11px]">生成后：鼠标滚轮缩放 · 左键拖拽移动 · 双击复位</div>
-      </div>
+       <!-- 图片：以容器中心为原点，transform 缩放平移 -->
+       <img
+         v-if="preview"
+         data-testid="single-shot-preview"
+         :src="previewUrl"
+         alt="单发预览"
+         decoding="async"
+         class="max-h-full max-w-full select-none"
+         :style="{
+           transform: `translate3d(${zoom.transform.value.x}px, ${zoom.transform.value.y}px, 0) scale(${zoom.transform.value.scale})`,
+           transformOrigin: 'center center',
+           willChange: 'transform',
+         }"
+         draggable="false"
+         @load="zoom.onImageLoad($event.target as HTMLImageElement)"
+       />
+ 
+       <!-- 加载态：生成中骨架 + 禁生成（防 base64 堆积） -->
+       <div
+         v-else-if="generating"
+         data-testid="single-shot-loading"
+         class="flex flex-col items-center justify-center gap-2 p-6 text-center text-xs text-muted-foreground"
+       >
+         <div class="h-24 w-24 animate-pulse rounded bg-muted" />
+         <div>生成中…（请勿重复点击）</div>
+       </div>
+ 
+       <!-- 失败态：存 lastError + 失败时间，展示重试 -->
+       <div
+         v-else-if="lastError"
+         data-testid="single-shot-error"
+         class="flex max-w-sm flex-col items-center justify-center gap-2 p-6 text-center text-xs"
+       >
+         <div class="text-red-600">单发失败{{ failedAt ? `（${failedAt}）` : '' }}：{{ lastError }}</div>
+         <Button data-testid="single-shot-retry" size="sm" class="h-7 text-xs" :disabled="generating" @click="onRetry">重试</Button>
+       </div>
+ 
+       <!-- 空态 -->
+       <div
+         v-else
+         data-testid="single-shot-empty"
+         class="flex flex-col items-center justify-center gap-1 p-6 text-center text-xs text-muted-foreground"
+       >
+         <div>暂无预览 — 填写 prompt 后点「生成」</div>
+         <div class="text-[11px]">生成后：鼠标滚轮缩放 · 左键拖拽移动 · 双击复位</div>
+         <div v-if="keyMissing" class="text-[11px] text-amber-600">未检测到 API 密钥 — 先到生图队列保存密钥/或新连接配置页设置</div>
+       </div>
 
       <!-- 已保存信息 -->
       <div
