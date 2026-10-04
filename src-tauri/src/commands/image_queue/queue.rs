@@ -1649,7 +1649,9 @@ pub fn iq_open_output_dir(state: State<'_, ImageQueueState>, app: AppHandle) -> 
      let (size, ratio) = validate_size_ratio(&size, &ratio)?;
      let (cfg, client) = {
          let cfg = state.config.lock().map_err(|e| format!("配置锁失败：{}", e))?.clone();
-         if cfg.api_key.trim().is_empty() {
+         // need01-02B：单发改读连接快照（队列规则不进入快照，client 指纹同理）
+         let snap = cfg.connection_snapshot();
+         if snap.api_key.trim().is_empty() {
              return Err("请先配置 API 密钥".to_string());
          }
          let client = state.client_for(&cfg)?;

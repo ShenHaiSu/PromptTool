@@ -197,19 +197,48 @@ impl ImageQueueConfig {
         Ok(())
     }
 
-    /// 并发容量（已钳制，`Semaphore::new` 直接用）。
-    pub fn concurrency_capped(&self) -> usize {
-        (self.concurrency.clamp(1, 8)) as usize
-    }
-}
+     /// 并发容量（已钳制，`Semaphore::new` 直接用）。
+     pub fn concurrency_capped(&self) -> usize {
+         (self.concurrency.clamp(1, 8)) as usize
+     }
+ 
+     /// need01-02B 连接快照：单发预览/保存命令改读此快照（client 指纹同理），队列规则字段不进入快照。
+     pub fn connection_snapshot(&self) -> ConnectionSnapshot {
+         ConnectionSnapshot {
+             api_base: self.api_base.clone(),
+             api_key: self.api_key.clone(),
+             proxy_on: self.proxy_on,
+             proxy_url: self.proxy_url.clone(),
+             connect_secs: self.connect_timeout_secs,
+             total_secs: self.total_timeout_secs,
+         }
+     }
+ }
+ 
+ /// 连接快照（内存态，不落盘）：`iq_generate_one_preview / iq_save_preview` 改读此快照。
+ #[derive(Debug, Clone)]
+ pub struct ConnectionSnapshot {
+     pub api_base: String,
+     pub api_key: String,
+     pub proxy_on: bool,
+     pub proxy_url: String,
+     pub connect_secs: u64,
+     pub total_secs: u64,
+ }
 
-pub fn config_file_path(data_dir: &Path) -> PathBuf {
-    data_dir.join("image_queue.json")
-}
-
-pub fn secrets_file_path(data_dir: &Path) -> PathBuf {
-    data_dir.join("image_queue.secrets.json")
-}
+ pub fn config_file_path(data_dir: &Path) -> PathBuf {
+     data_dir.join("image_queue.json")
+ }
+ 
+ /// need01-02B 连接独立文件（非敏感子集）。secrets 不动。
+ /// 旧 image_queue.json 打开自动迁移：缺 connection.json 时从旧全量拆出连接字段写入。
+ pub fn connection_file_path(data_dir: &Path) -> PathBuf {
+     data_dir.join("connection.json")
+ }
+ 
+ pub fn secrets_file_path(data_dir: &Path) -> PathBuf {
+     data_dir.join("image_queue.secrets.json")
+ }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct SecretsFile {
@@ -258,24 +287,93 @@ fn atomic_write(path: &Path, bytes: &[u8]) -> Result<(), String> {
     Ok(())
 }
 
-/// 非敏感配置持久化（原子写）。`api_key` 因 `skip_serializing` 不会落盘。
-pub fn save_config(data_dir: &Path, cfg: &ImageQueueConfig) -> Result<(), String> {
-    let json = serde_json::to_string_pretty(cfg).map_err(|e| e.to_string())?;
-    atomic_write(&config_file_path(data_dir), json.as_bytes())
-}
-
-/// 启动加载：缺文件即 Default；文件损坏返回 Err（调用方记日志后回落 Default）。
-pub fn load_config(data_dir: &Path) -> Result<ImageQueueConfig, String> {
-    let path = config_file_path(data_dir);
-    if !path.exists() {
-        return Ok(ImageQueueConfig::default());
-    }
-    let raw = std::fs::read_to_string(&path).map_err(|e| format!("读取配置失败 '{}': {}", path.display(), e))?;
-    let mut cfg: ImageQueueConfig = serde_json::from_str(&raw).map_err(|e| format!("配置解析失败: {}", e))?;
-    // 防御：钳制一遍，避免手改文件导致非法值。
-    let _ = cfg.validate_and_normalize();
-    Ok(cfg)
-}
+ /// 非敏感配置持久化（原子写）。`api_key` 因 `skip_serializing` 不会落盘。
+ /// need01-02B：同时写 connection.json（连接子集）+ image_queue.json（全量兼容），secrets 不动。
+ pub fn save_config(data_dir: &Path, cfg: &ImageQueueConfig) -> Result<(), String> {
+     let json = serde_json::to_string_pretty(cfg).map_err(|e| e.to_string())?;
+     atomic_write(&config_file_path(data_dir), json.as_bytes())?;
+     let conn = ConnectionFile::from_config(cfg);
+     let conn_json = serde_json::to_string_pretty(&conn).map_err(|e| e.to_string())?;
+     atomic_write(&connection_file_path(data_dir), conn_json.as_bytes())
+ }
+ 
+ /// 连接独立文件（非敏感子集，缺字段即默认，参考 validate 兼容写法）。
+ #[derive(Debug, Clone, Serialize, Deserialize, Default)]
+ #[serde(rename_all = "camelCase")]
+ pub struct ConnectionFile {
+     #[serde(default = "default_protocol")]
+     pub protocol: String,
+     #[serde(default = "default_api_base")]
+     pub api_base: String,
+     #[serde(default)]
+     pub proxy_on: bool,
+     #[serde(default)]
+     pub proxy_url: String,
+     #[serde(default = "default_true_fn")]
+     pub remember_key: bool,
+     #[serde(default = "default_connect_timeout_secs")]
+     pub connect_timeout_secs: u64,
+     #[serde(default = "default_total_timeout_secs")]
+     pub total_timeout_secs: u64,
+ }
+ 
+ fn default_protocol() -> String { "agnes".to_string() }
+ fn default_api_base() -> String { DEFAULT_API_BASE.to_string() }
+ fn default_true_fn() -> bool { true }
+ 
+ impl ConnectionFile {
+     pub fn from_config(cfg: &ImageQueueConfig) -> Self {
+         Self {
+             protocol: cfg.protocol.clone(),
+             api_base: cfg.api_base.clone(),
+             proxy_on: cfg.proxy_on,
+             proxy_url: String::new(),
+             remember_key: cfg.remember_key,
+             connect_timeout_secs: cfg.connect_timeout_secs,
+             total_timeout_secs: cfg.total_timeout_secs,
+         }
+     }
+     pub fn apply_to(&self, cfg: &mut ImageQueueConfig) {
+         cfg.protocol = self.protocol.clone();
+         cfg.api_base = self.api_base.clone();
+         cfg.proxy_on = self.proxy_on;
+         cfg.remember_key = self.remember_key;
+         cfg.connect_timeout_secs = self.connect_timeout_secs;
+         cfg.total_timeout_secs = self.total_timeout_secs;
+     }
+ }
+ 
+ /// 启动加载：缺文件即 Default；文件损坏返回 Err（调用方记日志后回落 Default）。
+ /// need01-02B 迁移：connection.json 存在则覆盖连接字段；缺失但旧 image_queue.json 存在则读旧全量并补写 connection.json。
+ pub fn load_config(data_dir: &Path) -> Result<ImageQueueConfig, String> {
+     let path = config_file_path(data_dir);
+     let conn_path = connection_file_path(data_dir);
+     if !path.exists() && !conn_path.exists() {
+         return Ok(ImageQueueConfig::default());
+     }
+     let mut cfg = if path.exists() {
+         let raw = std::fs::read_to_string(&path).map_err(|e| format!("读取配置失败 '{}': {}", path.display(), e))?;
+         serde_json::from_str::<ImageQueueConfig>(&raw).map_err(|e| format!("配置解析失败: {}", e))?
+     } else {
+         ImageQueueConfig::default()
+     };
+     if conn_path.exists() {
+         if let Ok(raw) = std::fs::read_to_string(&conn_path) {
+             if let Ok(conn) = serde_json::from_str::<ConnectionFile>(&raw) {
+                 conn.apply_to(&mut cfg);
+             }
+         }
+     } else if path.exists() {
+         // 一次性迁移读取：旧全量拆出连接子集落盘（失败不阻断启动）
+         let conn = ConnectionFile::from_config(&cfg);
+         if let Ok(conn_json) = serde_json::to_string_pretty(&conn) {
+             let _ = atomic_write(&conn_path, conn_json.as_bytes());
+         }
+     }
+     // 防御：钳制一遍，避免手改文件导致非法值。
+     let _ = cfg.validate_and_normalize();
+     Ok(cfg)
+ }
 
 /// secrets 存取：仅当 `remember_key == true` 调用 save；为 false 时删除旧文件。
 pub fn save_secrets(data_dir: &Path, api_key: &str, proxy_url: &str) -> Result<(), String> {
@@ -603,19 +701,40 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    #[test]
-    fn secrets_save_load_delete_temp_io() {
-        let dir = std::env::temp_dir().join(format!("pmf_iq_sec_{}", uuid::Uuid::new_v4()));
-        std::fs::create_dir_all(&dir).unwrap();
-        save_secrets(&dir, "sk-abc", "http://127.0.0.1:10808").unwrap();
-        let raw = std::fs::read_to_string(secrets_file_path(&dir)).unwrap();
-        assert!(!raw.contains("sk-abc"));
-        let loaded = load_secrets(&dir).unwrap().unwrap();
-        assert_eq!(loaded.0, "sk-abc");
-        assert_eq!(loaded.1, "http://127.0.0.1:10808");
-        delete_secrets(&dir);
-        assert!(!secrets_file_path(&dir).exists());
-        assert!(load_secrets(&dir).unwrap().is_none());
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-}
+     #[test]
+     fn secrets_save_load_delete_temp_io() {
+         let dir = std::env::temp_dir().join(format!("pmf_iq_sec_{}", uuid::Uuid::new_v4()));
+         std::fs::create_dir_all(&dir).unwrap();
+         save_secrets(&dir, "sk-abc", "http://127.0.0.1:10808").unwrap();
+         let raw = std::fs::read_to_string(secrets_file_path(&dir)).unwrap();
+         assert!(!raw.contains("sk-abc"));
+         let loaded = load_secrets(&dir).unwrap().unwrap();
+         assert_eq!(loaded.0, "sk-abc");
+         assert_eq!(loaded.1, "http://127.0.0.1:10808");
+         delete_secrets(&dir);
+         assert!(!secrets_file_path(&dir).exists());
+         assert!(load_secrets(&dir).unwrap().is_none());
+         let _ = std::fs::remove_dir_all(&dir);
+     }
+ 
+     #[test]
+     fn legacy_image_queue_migrates_to_connection_json() {
+         // need01-02B：旧 image_queue.json 打开自动迁移不断连
+         let dir = std::env::temp_dir().join(format!("pmf_iq_mig_{}", uuid::Uuid::new_v4()));
+         std::fs::create_dir_all(&dir).unwrap();
+         let mut c = ImageQueueConfig::default();
+         c.api_base = "https://old.example.com".into();
+         c.output_dir = "/tmp/q".into();
+         let json = serde_json::to_string_pretty(&c).unwrap();
+         std::fs::write(config_file_path(&dir), json).unwrap();
+         assert!(!connection_file_path(&dir).exists());
+         let back = load_config(&dir).unwrap();
+         assert_eq!(back.api_base, "https://old.example.com");
+         assert_eq!(back.output_dir, "/tmp/q");
+         assert!(connection_file_path(&dir).exists());
+         // 快照仅连接字段
+         let snap = back.connection_snapshot();
+         assert_eq!(snap.api_base, "https://old.example.com");
+         let _ = std::fs::remove_dir_all(&dir);
+     }
+ }
