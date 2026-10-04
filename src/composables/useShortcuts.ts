@@ -10,6 +10,8 @@ export type ShortcutHandlers = {
   save?: () => void
   copy?: () => void
   remove?: () => void
+  /** need04：Ctrl+H 开合历史抽屉 */
+  toggleHistory?: () => void
 }
 
 function isEditableTarget(target: EventTarget | null): boolean {
@@ -50,6 +52,15 @@ export function useShortcuts(handlers: ShortcutHandlers) {
       // 避免在无选中内容时劫持
       e.preventDefault()
       handlers.copy()
+      return
+    }
+
+    // Ctrl+H 开合历史抽屉 — need04；在输入框内不劫持
+    if (isCtrl && key === 'h') {
+      if (!handlers.toggleHistory) return
+      if (inInput) return
+      e.preventDefault()
+      handlers.toggleHistory()
       return
     }
 

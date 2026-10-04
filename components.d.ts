@@ -46,6 +46,7 @@ declare module 'vue' {
     GenerateStep1: typeof import('./src/components/generate/GenerateStep1.vue')['default']
     GenerateStep2: typeof import('./src/components/generate/GenerateStep2.vue')['default']
     GenerateStep3: typeof import('./src/components/generate/GenerateStep3.vue')['default']
+    HistoryDrawer: typeof import('./src/components/HistoryDrawer.vue')['default']
     HistoryPanel: typeof import('./src/components/HistoryPanel.vue')['default']
     ImageMetaPanel: typeof import('./src/components/ImageMetaPanel.vue')['default']
     ImageQueuePanel: typeof import('./src/components/ImageQueuePanel.vue')['default']

@@ -178,29 +178,28 @@ function copyPrompt(text: string): void {
 </script>
 
 <template>
-  <section data-testid="history-panel" class="flex min-h-0 flex-1 flex-col overflow-hidden" @click="closeCtx()">
-    <el-tabs v-model="tab" class="flex min-h-0 flex-1 flex-col">
-      <div class="flex shrink-0 items-center gap-2 border-b px-2 py-1.5">
-        <div class="flex shrink-0 gap-1">
-          <span data-testid="history-tab" class="cursor-pointer rounded px-2 py-1 text-xs" :class="tab === 'history' ? 'bg-accent font-semibold' : 'text-muted-foreground'" @click="tab = 'history'">历史</span>
-          <span data-testid="favorites-tab" class="cursor-pointer rounded px-2 py-1 text-xs" :class="tab === 'favorites' ? 'bg-accent font-semibold' : 'text-muted-foreground'" @click="tab = 'favorites'">收藏</span>
-          <span data-testid="templates-tab" class="cursor-pointer rounded px-2 py-1 text-xs" :class="tab === 'templates' ? 'bg-accent font-semibold' : 'text-muted-foreground'" @click="tab = 'templates'">模板</span>
-        </div>
-        <div class="ml-auto flex min-w-0 flex-1 justify-end">
-          <div class="relative w-full max-w-[180px]">
-            <el-input
-              data-testid="history-search"
-              v-model="search"
-              placeholder="搜索标题/Prompt..."
-              size="small"
-              clearable
-            />
-          </div>
-        </div>
-      </div>
-
-      <el-tab-pane name="history" :lazy="false">
-        <template #label><span class="hidden">历史pane</span></template>
+   <section data-testid="history-panel" class="flex min-h-0 flex-1 flex-col overflow-hidden" @click="closeCtx()">
+     <!-- 自制切换条：唯一可见的 tab 头（v2：上下零分隔线，border-b 已删） -->
+     <div class="flex shrink-0 items-center gap-2 px-2 py-1.5">
+       <div class="flex shrink-0 gap-1">
+         <span data-testid="history-tab" class="cursor-pointer rounded px-2 py-1 text-xs" :class="tab === 'history' ? 'bg-accent font-semibold' : 'text-muted-foreground'" @click="tab = 'history'">历史</span>
+         <span data-testid="favorites-tab" class="cursor-pointer rounded px-2 py-1 text-xs" :class="tab === 'favorites' ? 'bg-accent font-semibold' : 'text-muted-foreground'" @click="tab = 'favorites'">收藏</span>
+         <span data-testid="templates-tab" class="cursor-pointer rounded px-2 py-1 text-xs" :class="tab === 'templates' ? 'bg-accent font-semibold' : 'text-muted-foreground'" @click="tab = 'templates'">模板</span>
+       </div>
+       <div class="ml-auto flex min-w-0 flex-1 justify-end">
+         <div class="relative w-full max-w-[180px]">
+           <el-input
+             data-testid="history-search"
+             v-model="search"
+             placeholder="搜索标题/Prompt..."
+             size="small"
+             clearable
+           />
+         </div>
+       </div>
+     </div>
+     <el-tabs v-model="tab" class="flex min-h-0 flex-1 flex-col [&_.el-tabs__header]:hidden">
+       <el-tab-pane name="history" :lazy="false">
         <el-scrollbar class="flex-1">
           <div v-if="filteredRecent.length === 0" class="p-2">
             <el-empty data-testid="history-empty" description="暂无历史">
@@ -210,13 +209,6 @@ function copyPrompt(text: string): void {
                 <p v-if="search" class="text-xs"><button data-testid="history-empty-clear-search" class="text-primary underline" @click="search = ''">清空搜索</button></p>
               </template>
             </el-empty>
-            <button
-              v-if="search"
-              data-testid="history-search-clear"
-              class="mt-1 rounded px-1 text-xs text-muted-foreground hover:bg-accent"
-              title="清空"
-              @click="search = ''"
-            >✕</button>
           </div>
           <ul v-else data-testid="history-list" class="space-y-1.5 p-2">
             <li
@@ -253,7 +245,6 @@ function copyPrompt(text: string): void {
       </el-tab-pane>
 
       <el-tab-pane name="favorites" :lazy="false">
-        <template #label><span class="hidden">收藏pane</span></template>
         <el-scrollbar class="flex-1">
           <div v-if="filteredFavs.length === 0" class="p-2">
             <el-empty data-testid="favorites-empty" description="暂无收藏" />
@@ -285,7 +276,6 @@ function copyPrompt(text: string): void {
       </el-tab-pane>
 
       <el-tab-pane name="templates" :lazy="false">
-        <template #label><span class="hidden">模板pane</span></template>
         <el-scrollbar class="flex-1">
           <div v-if="filteredTemplates.length === 0" class="p-2">
             <el-empty data-testid="templates-empty" description="暂无模板" />

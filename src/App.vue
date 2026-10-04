@@ -11,7 +11,7 @@ import ModelConfigPanel from '@/components/ModelConfigPanel.vue'
 import { useConnectionProfileStore } from '@/stores/connectionProfile'
 import ImageMetaPanel from '@/components/ImageMetaPanel.vue'
 import StatsReportDialog from '@/components/StatsReportDialog.vue'
-import HistoryPanel from '@/components/HistoryPanel.vue'
+import HistoryDrawer from '@/components/HistoryDrawer.vue'
 import StatusBar from '@/components/StatusBar.vue'
 import LibraryDialog from '@/components/LibraryDialog.vue'
 import SegmentImportDialog from '@/components/SegmentImportDialog.vue'
@@ -35,7 +35,7 @@ const dbRegistry = useDbRegistryStore()
 const themeStore = useThemeStore()
 const library = useLibraryStore()
 void themeStore.mode
-const { leftFrac, centerFrac, setFracs } = useSash()
+const { leftFrac, setLeftFrac } = useSash()
 const push = notify
 const { dimCount, moduleCount, syncCountsFromLibrary } = useAppBootstrap()
 
@@ -76,7 +76,18 @@ function doRemoveShortcut(): void {
   push(`已移除 ${last.module.displayName}`, 'info', 1200)
 }
 
-useShortcuts({ focusSearch, save: doSaveShortcut, copy: doCopyShortcut, remove: doRemoveShortcut })
+const historyDrawerOpen = ref(false)
+function toggleHistoryDrawer(): void {
+  historyDrawerOpen.value = !historyDrawerOpen.value
+}
+
+useShortcuts({
+  focusSearch,
+  save: doSaveShortcut,
+  copy: doCopyShortcut,
+  remove: doRemoveShortcut,
+  toggleHistory: toggleHistoryDrawer,
+})
 
 const showDbManager = ref(false)
 const showLibraryDialog = ref(false)
@@ -129,21 +140,18 @@ async function refreshStats(): Promise<void> {
 }
 
 const layoutRef = ref<HTMLElement | null>(null)
-const dragging = ref<'left' | 'right' | null>(null)
+const dragging = ref<'left' | null>(null)
 let startX = 0
 let startLeft = 0
-let startCenter = 0
 let pendingDelta = 0
 let rafId: number | null = null
 
 const leftPct = computed(() => `${(leftFrac.value * 100).toFixed(4)}%`)
-const centerPct = computed(() => `${(centerFrac.value * 100).toFixed(4)}%`)
 
-function onSashPointerDown(e: PointerEvent, which: 'left' | 'right'): void {
-  dragging.value = which
+function onSashPointerDown(e: PointerEvent): void {
+  dragging.value = 'left'
   startX = e.clientX
   startLeft = leftFrac.value
-  startCenter = centerFrac.value
   pendingDelta = 0
   ;(e.currentTarget as HTMLElement).setPointerCapture(e.pointerId)
   window.addEventListener('pointermove', onPointerMove)
@@ -163,9 +171,7 @@ function onPointerMove(e: PointerEvent): void {
     if (w < 10) return
     const deltaFrac = pendingDelta / w
     if (dragging.value === 'left') {
-      setFracs(startLeft + deltaFrac, startCenter)
-    } else if (dragging.value === 'right') {
-      setFracs(startLeft, startCenter + deltaFrac)
+      setLeftFrac(startLeft + deltaFrac)
     }
   })
 }
@@ -187,7 +193,7 @@ function onPointerUp(e: PointerEvent): void {
       <div
         ref="layoutRef"
         data-testid="main-layout"
-        class="flex min-h-0 flex-1 overflow-hidden"
+        class="relative flex min-h-0 flex-1 overflow-hidden"
         :style="{ contain: 'layout paint' }"
       >
         <section
@@ -203,17 +209,17 @@ function onPointerUp(e: PointerEvent): void {
           class="flex w-2 shrink-0 items-center justify-center bg-border hover:bg-primary/20 cursor-col-resize select-none"
           :class="dragging === 'left' ? 'bg-primary/30' : ''"
           title="拖拽调整 左右比例"
-          @pointerdown="onSashPointerDown($event, 'left')"
+          @pointerdown="onSashPointerDown($event)"
         >
           <div class="h-8 w-0.5 rounded bg-muted-foreground/30" />
         </div>
 
         <section
           data-testid="panel-center"
-          class="flex min-h-0 shrink-0 flex-col overflow-hidden bg-background"
-          :style="{ width: centerPct }"
+          class="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-background"
         >
-          <el-tabs v-model="centerTab" class="min-h-0 flex-1 flex-col" @tab-change="switchCenterTab($event as typeof centerTab)">
+           <!-- 左 pl-3：对冲 EP 首 Tab padding-left:0；右 pr-14：给 history-fab 让位 -->
+           <el-tabs v-model="centerTab" class="min-h-0 flex-1 flex-col [&_.el-tabs__header]:pl-3 [&_.el-tabs__header]:pr-14" @tab-change="switchCenterTab($event as typeof centerTab)">
             <el-tab-pane name="prompt" :lazy="false">
               <template #label><span data-testid="center-tab-prompt" @click.stop="switchCenterTab('prompt')">Prompt 批量</span></template>
               <div class="flex min-h-0 flex-1 flex-col overflow-hidden">
@@ -247,25 +253,26 @@ function onPointerUp(e: PointerEvent): void {
           </el-tabs>
         </section>
 
-        <div
-          data-testid="sash-right"
-          class="flex w-2 shrink-0 items-center justify-center bg-border hover:bg-primary/20 cursor-col-resize select-none"
-          :class="dragging === 'right' ? 'bg-primary/30' : ''"
-          title="拖拽调整 中/右比例"
-          @pointerdown="onSashPointerDown($event, 'right')"
+        <!-- 右上角浮动按钮：收纳右栏（历史/收藏/模板） -->
+        <button
+          data-testid="history-fab"
+          type="button"
+          class="absolute right-4 top-3 z-30 inline-flex h-9 w-9 items-center justify-center rounded-full border bg-card text-foreground shadow-md transition-colors hover:bg-accent focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          title="历史 / 收藏 / 模板（Ctrl+H）"
+          aria-label="打开历史记录面板"
+          @click="toggleHistoryDrawer"
         >
-          <div class="h-8 w-0.5 rounded bg-muted-foreground/30" />
-        </div>
-
-        <section
-          data-testid="panel-right"
-          class="flex min-h-0 flex-1 flex-col overflow-hidden bg-card"
-        >
-          <HistoryPanel />
-        </section>
+          🕘
+          <span
+            v-if="historyStore.recent.length > 0"
+            data-testid="history-fab-badge"
+            class="absolute -right-1 -top-1 min-w-[18px] rounded-full bg-primary px-1 text-[10px] leading-[18px] text-primary-foreground"
+          >{{ historyStore.recent.length > 99 ? '99+' : historyStore.recent.length }}</span>
+        </button>
       </div>
 
       <StatusBar :dim-count="dimCount" :module-count="moduleCount" @toggle-library="toggleLibrary" @toggle-segment-import="toggleSegmentImport" @toggle-db-manager="showDbManager = true" />
+      <HistoryDrawer v-model:open="historyDrawerOpen" />
 
       <BusinessDbOnboardingDialog :open="dbRegistry.onboardingOpen" @update:open="dbRegistry.onboardingOpen = $event" />
       <DbManagerDrawer :open="showDbManager" @update:open="showDbManager = $event" />
