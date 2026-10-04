@@ -450,6 +450,20 @@ export async function dbExportLibraryToDir(dir: string): Promise<ExportToDirResu
 export async function dbRevealInExplorer(path: string): Promise<void> {
   await invoke('db_reveal_in_explorer', { path })
 }
+ 
+ export type StatsLedgerExportToDirResult = {
+   path: string
+   filename: string
+ }
+ 
+ /** need02-01 终态A：报表 CSV 文本后端落盘（默认导出目录 + 碰撞递增 + 原子写） */
+ export async function dbExportStatsLedgerToDir(
+   csvText: string,
+   from: string,
+   to: string,
+ ): Promise<StatsLedgerExportToDirResult> {
+   return invoke<StatsLedgerExportToDirResult>('db_export_stats_ledger_to_dir', { csvText, from, to })
+ }
 export type ImportMode = 'skip' | 'overwrite'
 
 export type LibraryImportReport = {

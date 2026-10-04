@@ -65,19 +65,118 @@ export function exportSingleCsv(ir: PromptIR, finalPrompt: string): void {
   ])
 }
 
-/**
- * 生成 CSV 文本（不下载），供 Rust db_export_csv 传入或测试校验
- * 含 BOM
- */
-export function buildCsvText(rows: ExportRow[]): string {
-  const header = ['序号', '提示词', '维度构成', '冲突警告']
-  const lines: string[] = []
-  lines.push(header.map(escCell).join(','))
-  rows.forEach((r, idx) => {
-    const prompt = r.finalPrompt || promptFromSegments(r.segments ?? [])
-    const dims = dimChain(r.segments ?? [])
-    const warns = (r.warnings ?? []).join(' | ')
-    lines.push([String(idx + 1), escCell(prompt), escCell(dims), escCell(warns)].join(','))
-  })
-  return '\uFEFF' + lines.join('\n') + '\n'
-}
+ /**
+  * 生成 CSV 文本（不下载），供 Rust db_export_csv 传入或测试校验
+  * 含 BOM
+  */
+ export function buildCsvText(rows: ExportRow[]): string {
+   const header = ['序号', '提示词', '维度构成', '冲突警告']
+   const lines: string[] = []
+   lines.push(header.map(escCell).join(','))
+   rows.forEach((r, idx) => {
+     const prompt = r.finalPrompt || promptFromSegments(r.segments ?? [])
+     const dims = dimChain(r.segments ?? [])
+     const warns = (r.warnings ?? []).join(' | ')
+     lines.push([String(idx + 1), escCell(prompt), escCell(dims), escCell(warns)].join(','))
+   })
+   return '\uFEFF' + lines.join('\n') + '\n'
+ }
+ 
+ /* ---------------- need01-03 报表 CSV（复用 escCell + Blob 下载链路） ---------------- */
+ 
+ export interface StatsSummaryLike {
+   total: number
+   succeeded: number
+   failed: number
+   pixels: number
+   avgElapsedMs: number
+ }
+ 
+ export interface StatsDailyLike {
+   day: string
+   total: number
+   succeeded: number
+   pixels: number
+ }
+ 
+ export interface StatsHourlyLike {
+   hour: number
+   total: number
+   succeeded: number
+   pixels: number
+ }
+ 
+ export interface StatsLedgerExportOpts {
+   from: string
+   to: string
+   focusDay: string
+   summary: StatsSummaryLike | null
+   daily: StatsDailyLike[]
+   hourly: StatsHourlyLike[]
+ }
+ 
+ /**
+  * 三段式报表 CSV 文本（含 BOM，可单测）：
+  * 汇总段 + 按天段 + 按小时段，段间空行；空 daily/hourly 仍保留汇总段 + “暂无数据”行。
+  * 复用内部 escCell（RFC4180 转义），与 exportCsv 同一转义口径。
+  */
+ export function buildStatsLedgerCsvText(opts: StatsLedgerExportOpts): string {
+   const { from, to, focusDay, summary, daily, hourly } = opts
+   const lines: string[] = []
+   // —— 汇总段 ——
+   lines.push([escCell('汇总'), escCell(`${from}~${to}`)].join(','))
+   lines.push(['总数', '成功', '失败', '像素', '平均耗时ms'].map(escCell).join(','))
+   if (summary) {
+     lines.push(
+       [
+         String(summary.total),
+         String(summary.succeeded),
+         String(summary.failed),
+         String(summary.pixels),
+         String(summary.avgElapsedMs),
+       ]
+         .map(escCell)
+         .join(','),
+     )
+   } else {
+     lines.push([escCell('暂无数据'), escCell(''), escCell(''), escCell(''), escCell('')].join(','))
+   }
+   lines.push('')
+   // —— 按天段 ——
+   lines.push([escCell('按天')].join(','))
+   lines.push(['日期', '总数', '成功', '像素'].map(escCell).join(','))
+   if (daily.length) {
+     for (const r of daily) {
+       lines.push([escCell(r.day), escCell(String(r.total)), escCell(String(r.succeeded)), escCell(String(r.pixels))].join(','))
+     }
+   } else {
+     lines.push([escCell('暂无数据'), escCell(''), escCell(''), escCell('')].join(','))
+   }
+   lines.push('')
+   // —— 按小时段 ——
+   lines.push([escCell(`按小时(${focusDay})`)].join(','))
+   lines.push(['小时', '总数', '成功', '像素'].map(escCell).join(','))
+   if (hourly.length) {
+     for (const h of hourly) {
+       lines.push(
+         [escCell(String(h.hour)), escCell(String(h.total)), escCell(String(h.succeeded)), escCell(String(h.pixels))].join(','),
+       )
+     }
+   } else {
+     lines.push([escCell('暂无数据'), escCell(''), escCell(''), escCell('')].join(','))
+   }
+   return '\uFEFF' + lines.join('\n') + '\n'
+ }
+ 
+ /** 报表 CSV 下载：文件名 pmf-stats-{from}_{to}.csv，复用 BOM+Blob 链路。 */
+ export function exportStatsLedgerCsv(opts: StatsLedgerExportOpts): void {
+   const csv = buildStatsLedgerCsvText(opts)
+   const filename = `pmf-stats-${opts.from}_${opts.to}.csv`
+   const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' })
+   const url = URL.createObjectURL(blob)
+   const a = document.createElement('a')
+   a.href = url
+   a.download = filename
+   a.click()
+   URL.revokeObjectURL(url)
+ }

@@ -5,17 +5,19 @@ import { Button } from '@/components/ui/button'
 import { useStatsReport } from '@/composables/useStatsReport'
 import { useToast } from '@/composables/useToast'
 import { useImageQueueStore } from '@/stores/imageQueue'
-import {
-  statsLedgerSummary,
-  statsLedgerDaily,
-  statsLedgerHourly,
-  todayStr,
-  addDaysStr,
-  formatPixels,
-  type LedgerSummary,
-  type LedgerDailyRow,
-  type LedgerHourlyRow,
-} from '@/lib/statsApi'
+ import {
+   statsLedgerSummary,
+   statsLedgerDaily,
+   statsLedgerHourly,
+   todayStr,
+   addDaysStr,
+   formatPixels,
+   type LedgerSummary,
+   type LedgerDailyRow,
+   type LedgerHourlyRow,
+ } from '@/lib/statsApi'
+ import { buildStatsLedgerCsvText } from '@/lib/export'
+ import { dbExportStatsLedgerToDir, dbRevealInExplorer } from '@/lib/db'
 
 const statsUi = useStatsReport()
 const { push } = useToast()
@@ -35,8 +37,52 @@ const successRate = computed(() => {
   if (!s || s.total <= 0) return '—'
   return `${((s.succeeded / s.total) * 100).toFixed(1)}%`
 })
-
-const maxHour = computed(() => Math.max(1, ...hourly.value.map((h) => h.total)))
+ const maxHour = computed(() => Math.max(1, ...hourly.value.map((h) => h.total)))
+ // need02-01 终态A：导出冷却 2s 防人工并发（失败也走完冷却，防报错连点）
+ const exportCooling = ref(false)
+ let coolTimer: ReturnType<typeof setTimeout> | null = null
+ const canExport = computed(() => !loading.value && !exportCooling.value && summary.value != null)
+ const exportBtnLabel = computed(() => (exportCooling.value ? '已导出(2s)' : '导出CSV'))
+ 
+ async function onExportCsv(): Promise<void> {
+   if (exportCooling.value || loading.value) return
+   if (!summary.value) return
+   exportCooling.value = true
+   if (coolTimer) clearTimeout(coolTimer)
+   coolTimer = setTimeout(() => {
+     exportCooling.value = false
+     coolTimer = null
+   }, 2000)
+   try {
+     const csv = buildStatsLedgerCsvText({
+       from: from.value,
+       to: to.value,
+       focusDay: focusDay.value,
+       summary: summary.value,
+       daily: daily.value,
+       hourly: hourly.value,
+     })
+     const res = await dbExportStatsLedgerToDir(csv, from.value, to.value)
+     try {
+       await dbRevealInExplorer(res.path)
+       push(`已导出并定位：${res.path}`, 'success', 2500)
+     } catch (revealErr) {
+       push(`已导出 ${res.path}`, 'success', 2500)
+       // opener 二次兜底（LibraryDialog#124 同款）
+       try {
+         const mod: unknown = await import('@tauri-apps/plugin-opener')
+         const fn = (mod as { openPath?: (p: string) => Promise<void>; open?: (p: string) => Promise<void> }).openPath
+           ?? (mod as { open?: (p: string) => Promise<void> }).open
+         if (typeof fn === 'function') await (fn as (p: string) => Promise<void>)(res.path)
+         else throw new Error('opener unavailable')
+       } catch (err2) {
+         push(`定位失败 ${revealErr instanceof Error ? revealErr.message : String(revealErr)} / 兜底亦失败：${err2 instanceof Error ? err2.message : String(err2)}`, 'error')
+       }
+     }
+   } catch (err) {
+     push(`导出失败：${err instanceof Error ? err.message : String(err)}`, 'error')
+   }
+ }
 
 function setToday(): void {
   const t = todayStr()
@@ -98,8 +144,14 @@ watch(() => statsUi.showStatsReport.value, (open) => {
   }
 })
 
-onMounted(() => window.addEventListener('keydown', onKeydown))
-onBeforeUnmount(() => window.removeEventListener('keydown', onKeydown))
+ onMounted(() => window.addEventListener('keydown', onKeydown))
+ onBeforeUnmount(() => {
+   window.removeEventListener('keydown', onKeydown)
+   if (coolTimer) {
+     clearTimeout(coolTimer)
+     coolTimer = null
+   }
+ })
 </script>
 
 <template>
@@ -114,11 +166,12 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKeydown))
         <div class="flex items-center gap-2">
           <h4 class="text-sm font-semibold">📊 生成统计报表</h4>
           <span v-if="estimated" class="rounded bg-amber-100 px-1.5 py-px text-[11px] text-amber-700">估算（主库不可用，内存回退）</span>
-          <div class="ml-auto flex items-center gap-1">
-            <Button size="sm" variant="outline" class="h-7 text-xs" @click="setToday">今天</Button>
-            <Button size="sm" variant="outline" class="h-7 text-xs" @click="setWeek">近7天</Button>
-            <Button size="sm" variant="ghost" class="h-7 text-xs" @click="statsUi.close()">关闭</Button>
-          </div>
+           <div class="ml-auto flex items-center gap-1">
+             <Button size="sm" variant="outline" data-testid="stats-export-csv" class="h-7 text-xs" :disabled="!canExport" @click="onExportCsv">{{ exportBtnLabel }}</Button>
+             <Button size="sm" variant="outline" class="h-7 text-xs" @click="setToday">今天</Button>
+             <Button size="sm" variant="outline" class="h-7 text-xs" @click="setWeek">近7天</Button>
+             <Button size="sm" variant="ghost" class="h-7 text-xs" @click="statsUi.close()">关闭</Button>
+           </div>
         </div>
         <div class="mt-2 flex flex-wrap items-center gap-2 text-xs">
           <label class="flex items-center gap-1">

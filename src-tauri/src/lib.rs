@@ -107,8 +107,9 @@ pub fn run() {
             commands::business::db_rebuild_missing,
             commands::business::db_remove_registry,
             commands::business::db_update_registry_meta,
-            commands::export::db_get_default_export_dir,
-            commands::export::db_export_library_to_dir,
+             commands::export::db_get_default_export_dir,
+             commands::export::db_export_library_to_dir,
+             commands::export::db_export_stats_ledger_to_dir,
             commands::export::db_reveal_in_explorer,
             // --- Need07: 路径探针 2 + 输出目录打开/解析 2 ---
             commands::path_resolve::path_get_bases,

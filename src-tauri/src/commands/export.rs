@@ -155,6 +155,73 @@ pub fn db_export_library_to_dir(app: AppHandle, dir: String) -> Result<ExportToD
         filename,
     })
 }
+ 
+ // ------------------------------------------------------------------
+ // need02-01 终态A：报表 CSV 落盘（后端真路径 + reveal 真定位）
+ // 目录复用默认导出目录（与词库导出同口径 db_get_default_export_dir）；
+ // 文件名仍 pmf-stats-{from}_{to}.csv + 碰撞 -1/-2，原子写。
+ // ------------------------------------------------------------------
+ 
+ #[derive(Debug, Clone, Serialize, Deserialize)]
+ #[serde(rename_all = "camelCase")]
+ pub struct StatsExportToDirResult {
+     pub path: String,
+     pub filename: String,
+ }
+ 
+ fn sanitize_date_token(raw: &str) -> String {
+     let t: String = raw
+         .trim()
+         .chars()
+         .filter(|c| c.is_ascii_alphanumeric() || *c == '-' || *c == '_')
+         .collect();
+     if t.is_empty() {
+         "unknown".to_string()
+     } else {
+         t.chars().take(32).collect()
+     }
+ }
+ 
+ fn stats_ledger_filename(from: &str, to: &str) -> String {
+     format!(
+         "pmf-stats-{}_{}.csv",
+         sanitize_date_token(from),
+         sanitize_date_token(to)
+     )
+ }
+ 
+ #[tauri::command]
+ pub fn db_export_stats_ledger_to_dir(
+     app: AppHandle,
+     csv_text: String,
+     from: String,
+     to: String,
+ ) -> Result<StatsExportToDirResult, String> {
+     if csv_text.trim().is_empty() {
+         return Err("报表内容为空，拒绝落盘".to_string());
+     }
+     let dir_path = default_export_dir_for(&app)?;
+     std::fs::create_dir_all(&dir_path)
+         .map_err(|e| format!("目录不存在且无法创建 '{}': {}", dir_path.display(), e))?;
+     let probe = dir_path.join(".pmf_write_probe.tmp");
+     match std::fs::write(&probe, b"probe") {
+         Ok(_) => {
+             let _ = std::fs::remove_file(&probe);
+         }
+         Err(e) => {
+             return Err(format!("目录不可写 '{}': {}", dir_path.display(), e));
+         }
+     }
+     let stem = stats_ledger_filename(&from, &to);
+     let filename_buf = unique_filename_in(&dir_path, &stem);
+     let filename = filename_buf.to_string_lossy().to_string();
+     let full_path = dir_path.join(&filename_buf);
+     atomic_write(&full_path, csv_text.as_bytes())?;
+     Ok(StatsExportToDirResult {
+         path: full_path.to_string_lossy().to_string(),
+         filename,
+     })
+ }
 
 /// need07 重写：占位符拦截 → 脱壳 → 相对拼 active → ensure 保活 →
 /// Windows 文件用 explorer 双参数 `/select,` + 路径，目录直接打开；
@@ -272,5 +339,44 @@ mod tests {
         assert!(name.ends_with(".json"));
         // length: pmf-library- (12) + 8 date + 1 dash + 6 time + 5 .json = 32
         assert_eq!(name.len(), 32);
-    }
+     }
+ 
+     #[test]
+     fn stats_ledger_filename_keeps_range_and_csv() {
+         let name = stats_ledger_filename("2026-09-28", "2026-10-04");
+         assert_eq!(name, "pmf-stats-2026-09-28_2026-10-04.csv");
+     }
+ 
+     #[test]
+     fn stats_ledger_filename_sanitizes_traversal() {
+         let name = stats_ledger_filename("../../etc", "2026-10-04");
+         assert!(!name.contains('/'));
+         assert!(!name.contains('\\'));
+         assert!(name.ends_with(".csv"));
+         assert!(name.starts_with("pmf-stats-"));
+     }
+ 
+     #[test]
+     fn stats_ledger_filename_empty_falls_back_unknown() {
+         let name = stats_ledger_filename("", "");
+         assert_eq!(name, "pmf-stats-unknown_unknown.csv");
+     }
+ 
+     #[test]
+     fn stats_ledger_atomic_write_and_collision() {
+         let dir = std::env::temp_dir().join(format!("pmf_stats_export_{}", uuid::Uuid::new_v4()));
+         std::fs::create_dir_all(&dir).unwrap();
+         let stem = stats_ledger_filename("2026-09-28", "2026-10-04");
+         let csv = "\u{FEFF}\u{6C47}\u{603B}\n";
+         let f1 = unique_filename_in(&dir, &stem);
+         atomic_write(&dir.join(&f1), csv.as_bytes()).unwrap();
+         assert!(dir.join(&f1).exists());
+         // 碰撞递增
+         let f2 = unique_filename_in(&dir, &stem);
+         assert_eq!(f2, PB::from("pmf-stats-2026-09-28_2026-10-04-1.csv"));
+         atomic_write(&dir.join(&f2), csv.as_bytes()).unwrap();
+         let back = std::fs::read(&dir.join(&f1)).unwrap();
+         assert!(back.starts_with(&[0xEF, 0xBB, 0xBF]));
+         let _ = std::fs::remove_dir_all(&dir);
 }
+ }
