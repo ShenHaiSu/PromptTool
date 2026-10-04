@@ -1,9 +1,7 @@
 <script setup lang="ts">
 import { ref, computed, watch, onMounted, onBeforeUnmount } from 'vue'
-import { Card } from '@/components/ui/card'
-import { Button } from '@/components/ui/button'
 import { useStatsReport } from '@/composables/useStatsReport'
-import { useToast } from '@/composables/useToast'
+import { notify } from '@/lib/notify'
 import { useImageQueueStore } from '@/stores/imageQueue'
  import {
    statsLedgerSummary,
@@ -20,7 +18,6 @@ import { useImageQueueStore } from '@/stores/imageQueue'
  import { dbExportStatsLedgerToDir, dbRevealInExplorer } from '@/lib/db'
 
 const statsUi = useStatsReport()
-const { push } = useToast()
 const iq = useImageQueueStore()
 
 const from = ref(addDaysStr(todayStr(), -6))
@@ -65,9 +62,9 @@ const successRate = computed(() => {
      const res = await dbExportStatsLedgerToDir(csv, from.value, to.value)
      try {
        await dbRevealInExplorer(res.path)
-       push(`已导出并定位：${res.path}`, 'success', 2500)
+       notify(`已导出并定位：${res.path}`, 'success', 2500)
      } catch (revealErr) {
-       push(`已导出 ${res.path}`, 'success', 2500)
+       notify(`已导出 ${res.path}`, 'success', 2500)
        // opener 二次兜底（LibraryDialog#124 同款）
        try {
          const mod: unknown = await import('@tauri-apps/plugin-opener')
@@ -76,11 +73,11 @@ const successRate = computed(() => {
          if (typeof fn === 'function') await (fn as (p: string) => Promise<void>)(res.path)
          else throw new Error('opener unavailable')
        } catch (err2) {
-         push(`定位失败 ${revealErr instanceof Error ? revealErr.message : String(revealErr)} / 兜底亦失败：${err2 instanceof Error ? err2.message : String(err2)}`, 'error')
+         notify(`定位失败 ${revealErr instanceof Error ? revealErr.message : String(revealErr)} / 兜底亦失败：${err2 instanceof Error ? err2.message : String(err2)}`, 'error')
        }
      }
    } catch (err) {
-     push(`导出失败：${err instanceof Error ? err.message : String(err)}`, 'error')
+     notify(`导出失败：${err instanceof Error ? err.message : String(err)}`, 'error')
    }
  }
 
@@ -116,7 +113,7 @@ async function fetchAll(): Promise<void> {
     hourly.value = h
   } catch (err) {
     // 主库不可用：toast + 内存回退（当日内存计数，标注“估算”）
-    push(`报表读取失败：${err instanceof Error ? err.message : String(err)}`, 'error')
+    notify(`报表读取失败：${err instanceof Error ? err.message : String(err)}`, 'error')
     estimated.value = true
     const mem = iq.stats
     summary.value = {
@@ -162,15 +159,15 @@ watch(() => statsUi.showStatsReport.value, (open) => {
       class="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
       @click.self="statsUi.close()"
     >
-      <Card class="max-h-[85vh] w-full max-w-2xl overflow-auto p-4">
+      <el-card shadow="never" class="max-h-[85vh] w-full max-w-2xl overflow-auto">
         <div class="flex items-center gap-2">
           <h4 class="text-sm font-semibold">📊 生成统计报表</h4>
           <span v-if="estimated" class="rounded bg-amber-100 px-1.5 py-px text-[11px] text-amber-700">估算（主库不可用，内存回退）</span>
            <div class="ml-auto flex items-center gap-1">
-             <Button size="sm" variant="outline" data-testid="stats-export-csv" class="h-7 text-xs" :disabled="!canExport" @click="onExportCsv">{{ exportBtnLabel }}</Button>
-             <Button size="sm" variant="outline" class="h-7 text-xs" @click="setToday">今天</Button>
-             <Button size="sm" variant="outline" class="h-7 text-xs" @click="setWeek">近7天</Button>
-             <Button size="sm" variant="ghost" class="h-7 text-xs" @click="statsUi.close()">关闭</Button>
+             <el-button plain size="small" data-testid="stats-export-csv" :disabled="!canExport" @click="onExportCsv">{{ exportBtnLabel }}</el-button>
+             <el-button plain size="small" @click="setToday">今天</el-button>
+             <el-button plain size="small" @click="setWeek">近7天</el-button>
+             <el-button text size="small" @click="statsUi.close()">关闭</el-button>
            </div>
         </div>
         <div class="mt-2 flex flex-wrap items-center gap-2 text-xs">
@@ -186,7 +183,7 @@ watch(() => statsUi.showStatsReport.value, (open) => {
             <span class="text-muted-foreground">小时聚焦</span>
             <input v-model="focusDay" data-testid="stats-day" type="date" class="h-7 rounded border bg-background px-2 text-xs" />
           </label>
-          <Button size="sm" class="h-7 text-xs" :disabled="loading" @click="fetchAll">{{ loading ? '读取中…' : '查询' }}</Button>
+          <el-button type="primary" size="small" :disabled="loading" @click="fetchAll">{{ loading ? '读取中…' : '查询' }}</el-button>
         </div>
         <div v-if="summary" class="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-4">
           <div data-testid="stats-total" class="rounded border p-2">
@@ -241,7 +238,7 @@ watch(() => statsUi.showStatsReport.value, (open) => {
         <div class="mt-1 flex gap-1 text-[10px] text-muted-foreground">
           <span v-for="h in hourly" :key="`l-${h.hour}`" class="flex-1 text-center">{{ h.hour % 3 === 0 ? h.hour : '' }}</span>
         </div>
-      </Card>
+      </el-card>
     </div>
   </Teleport>
 </template>

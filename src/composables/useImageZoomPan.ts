@@ -1,4 +1,5 @@
 import { ref, computed, onMounted, onBeforeUnmount, type Ref } from 'vue'
+import { logger } from '@/lib/logger'
 
 /** 缩放范围 */
 export const ZOOM_MIN = 0.1
@@ -206,7 +207,9 @@ export function useImageZoomPan(stageRef: Ref<HTMLElement | null>) {
     if (dragPointerId !== e.pointerId) return
     try {
       stageRef.value?.releasePointerCapture?.(e.pointerId)
-    } catch { /* ignore */ }
+    } catch (e) {
+      logger.warn('useImageZoomPan', '释放 pointer capture 失败：', e)
+    }
     dragPointerId = null
     dragging.value = false
   }

@@ -1,8 +1,5 @@
 <script setup lang="ts">
 import { ref, watch, computed } from 'vue'
-import { Button } from '@/components/ui/button'
-import { Input } from '@/components/ui/input'
-import { Card } from '@/components/ui/card'
 import type { Dimension } from '@/engine/models'
 
 const props = withDefaults(defineProps<{
@@ -77,74 +74,68 @@ function onKeydown(e: KeyboardEvent): void {
     @click.self="onClose"
     @keydown="onKeydown"
   >
-    <Card
+    <el-dialog
+      :model-value="open"
+      :title="title"
+      width="440px"
+      destroy-on-close
+      :append-to-body="false"
       data-testid="dimension-edit-dialog"
-      class="w-full max-w-md p-4 shadow-xl"
+      @close="onClose"
       @click.stop
     >
-      <h3 class="text-sm font-semibold">{{ title }}</h3>
-      <div class="mt-3 space-y-3">
-        <label class="flex flex-col gap-1">
-          <span class="text-xs text-muted-foreground">分类键名 (英文，唯一标识) *</span>
-          <Input
+      <el-form label-width="96px" :rules="{ key: [{ required: true, message: '键名必填', trigger: 'blur' }], nameCn: [{ required: true, message: '中文名称必填', trigger: 'blur' }] }" @submit.prevent>
+        <el-form-item label="分类键名" required>
+          <el-input
             data-testid="dimension-edit-key"
             v-model="key"
             :disabled="isEdit"
             :title="isEdit ? '编辑模式下键名不可修改' : ''"
             placeholder="如: outfit"
-            class="h-8 text-sm"
           />
           <span v-if="isEdit" class="text-[11px] text-muted-foreground">编辑模式下此字段只读</span>
-        </label>
-        <label class="flex flex-col gap-1">
-          <span class="text-xs text-muted-foreground">中文名称 *</span>
-          <Input
+        </el-form-item>
+        <el-form-item label="中文名称" required>
+          <el-input
             data-testid="dimension-edit-nameCn"
             v-model="nameCn"
             placeholder="如: 套装"
-            class="h-8 text-sm"
           />
-        </label>
-        <label class="flex flex-col gap-1">
-          <span class="text-xs text-muted-foreground">英文名称 (可选)</span>
-          <Input
+        </el-form-item>
+        <el-form-item label="英文名称">
+          <el-input
             data-testid="dimension-edit-nameEn"
             v-model="nameEn"
             placeholder="如: Outfit"
-            class="h-8 text-sm"
           />
-        </label>
-        <label class="flex items-center gap-2">
-          <input
+        </el-form-item>
+        <el-form-item label="允许多选">
+          <el-switch
             data-testid="dimension-edit-multi"
-            type="checkbox"
             v-model="isMultiSelect"
-            class="h-3.5 w-3.5 rounded border-input"
           />
-          <span class="text-xs text-muted-foreground">允许多选 (同维度可选多个词条)</span>
-        </label>
-        <label class="flex flex-col gap-1">
-          <span class="text-xs text-muted-foreground">排序权重</span>
-          <input
+          <span class="ml-2 text-xs text-muted-foreground">同维度可选多个词条</span>
+        </el-form-item>
+        <el-form-item label="排序权重">
+          <el-input-number
             data-testid="dimension-edit-sortOrder"
-            v-model.number="sortOrder"
-            type="number"
-            class="flex h-8 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+            v-model="sortOrder"
+            :step="1"
           />
-          <span class="text-[11px] text-muted-foreground">数值越小越靠前</span>
-        </label>
-      </div>
-      <div class="mt-4 flex justify-end gap-2">
-        <Button data-testid="dimension-edit-cancel" variant="ghost" size="sm" class="h-7 text-xs" @click="onClose">取消</Button>
-        <Button
+          <span class="ml-2 text-[11px] text-muted-foreground">数值越小越靠前</span>
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button data-testid="dimension-edit-cancel" text size="small" @click="onClose">取消</el-button>
+        <el-button
           data-testid="dimension-edit-confirm"
-          size="sm"
-          class="h-7 text-xs"
+          type="primary"
+          size="small"
           :disabled="!key.trim() || !nameCn.trim()"
           @click="onConfirm"
-        >保存</Button>
-      </div>
+        >保存</el-button>
+      </template>
       <p class="mt-2 text-[11px] text-muted-foreground">Ctrl+Enter 快速确认 · Esc 关闭</p>
-    </Card>
+    </el-dialog>
   </div>
 </template>

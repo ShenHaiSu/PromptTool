@@ -1,11 +1,11 @@
 <script setup lang="ts">
+import IqLoopToggles from '@/components/queue/IqLoopToggles.vue'
 import { ref, computed, onMounted } from 'vue'
-import { Button } from '@/components/ui/button'
-import { Input } from '@/components/ui/input'
-import { useToast } from '@/composables/useToast'
+import { logger } from '@/lib/logger'
+import { notify } from '@/lib/notify'
 import { useImageQueueStore } from '@/stores/imageQueue'
 import { useConnectionProfileStore } from '@/stores/connectionProfile'
- import { useAssemblyStore } from '@/stores/assembly'
+import { useAssemblyStore } from '@/stores/assembly'
 import { iqGetResolvedOutputDir, pathGetBases } from '@/lib/imageQueueApi'
 import {
   IQ_DEFAULT_OUTPUT_HINT,
@@ -18,7 +18,6 @@ import {
 
 const iq = useImageQueueStore()
 const conn = useConnectionProfileStore()
-const { push } = useToast()
 const emit = defineEmits<{ (e: 'goto-model'): void }>()
 function gotoModel(): void {
   emit('goto-model')
@@ -52,7 +51,7 @@ const proxyPlaceholder = computed(() =>
 )
 
 function onApiBaseBlur(): void {
-  push('连接字段只读，请去右上「模型配置」修改', 'warning')
+  notify('连接字段只读，请去右上「模型配置」修改', 'warning')
 }
 
 function onKeyFocus(): void {
@@ -72,7 +71,7 @@ async function onBrowseOutput(): Promise<void> {
       iq.markDirty()
     }
   } catch (err) {
-    push(`选择目录失败：${err instanceof Error ? err.message : String(err)}`, 'error')
+    notify(`选择目录失败：${err instanceof Error ? err.message : String(err)}`, 'error')
   }
 }
 
@@ -116,7 +115,7 @@ function exitCustomConcurrency(): void {
 }
 
 function onResetApiBase(): void {
-  push('连接字段只读，请去右上「模型配置」修改', 'warning')
+  notify('连接字段只读，请去右上「模型配置」修改', 'warning')
   gotoModel()
 }
 // need07：输出目录 placeholder 显示后端解析值；老默认保留时给 hint
@@ -130,10 +129,9 @@ onMounted(async () => {
     if (!iq.config.outputDir.trim() && norm(dir) === norm(`${bases.activeData}/output/images`)) {
       legacyKeptHint.value = `旧默认位置（已保留）：${dir}`
     }
-  } catch { /* 降级：静态 hint */ }
+  } catch (err) { logger.warn('ImageQueueSettings', 'resolvedOutputDir降级', err) }
 })
 </script>
-
 <template>
   <section data-testid="image-queue-settings" class="flex flex-col gap-2 px-3 py-2">
     <!-- 吸顶操作条：标题 + 脏态 + 保存/测试常驻 -->
@@ -146,10 +144,9 @@ onMounted(async () => {
       >
       <span v-else class="text-[11px] leading-4 text-muted-foreground">已保存</span>
       <div class="ml-auto flex items-center gap-1.5">
-        <Button data-testid="iq-save" size="sm" class="h-7 text-xs" @click="onSave">保存</Button>
+        <el-button data-testid="iq-save" type="primary" size="small" @click="onSave">保存</el-button>
       </div>
     </div>
-
     <div class="grid grid-cols-1 gap-2 min-[560px]:grid-cols-2">
       <!-- 画面卡：分辨率分段 + 比例芯片 + 输出路径 -->
       <div class="flex flex-col gap-1.5 rounded-lg border bg-muted/30 p-2.5 min-[560px]:col-span-2">
@@ -190,14 +187,15 @@ onMounted(async () => {
         </div>
         <div class="flex items-center gap-2 text-xs">
           <span class="shrink-0 text-muted-foreground">输出</span>
-          <Input
+          <el-input
             data-testid="iq-output-dir"
-            class="h-7 flex-1 text-xs"
+            size="small"
+            class="flex-1"
             :placeholder="resolvedOutputDir || IQ_DEFAULT_OUTPUT_HINT"
             :model-value="iq.config.outputDir"
             @update:model-value="iq.config.outputDir = String($event); iq.markDirty()"
           />
-          <Button data-testid="iq-output-browse" size="sm" variant="outline" class="h-7 shrink-0 px-2 text-xs" @click="onBrowseOutput">浏览</Button>
+          <el-button data-testid="iq-output-browse" size="small" plain @click="onBrowseOutput">浏览</el-button>
         </div>
         <div v-if="legacyKeptHint" class="truncate text-[11px] text-muted-foreground" :title="legacyKeptHint">{{ legacyKeptHint }}</div>
       </div>
@@ -235,60 +233,19 @@ onMounted(async () => {
             <button type="button" class="h-6 shrink-0 px-1 text-[11px] text-primary" title="返回步进器" @click="exitCustomConcurrency">预设</button>
           </div>
         </div>
-        <div class="grid grid-cols-2 gap-x-2 gap-y-1 text-xs">
-          <label class="flex min-w-0 items-center gap-1.5" title="队列见底自动补货">
-            <input
-              data-testid="iq-loop"
-              type="checkbox"
-              class="h-3.5 w-3.5 shrink-0 accent-primary"
-              :checked="iq.config.loopEnabled"
-              @change="iq.config.loopEnabled = ($event.target as HTMLInputElement).checked; iq.markDirty()"
-            />
-            <span class="truncate">循环生成</span>
-          </label>
-          <label class="flex min-w-0 items-center gap-1.5" title="开始前备料（数量取并发数）">
-            <input
-              data-testid="iq-auto-random-on-start"
-              type="checkbox"
-              class="h-3.5 w-3.5 shrink-0 accent-primary"
-              :checked="iq.config.autoRandomOnStart"
-              @change="iq.config.autoRandomOnStart = ($event.target as HTMLInputElement).checked; iq.markDirty()"
-            />
-            <span class="truncate">自动备料</span>
-          </label>
-           <div class="col-span-2 text-[11px] text-muted-foreground">运行中每次起生成自动补足到并发量（关即仅饿死补货）</div>
-           <label class="flex min-w-0 items-center gap-1.5" title="以画布已选项为锚点，仅随机缺口维度；画布为空时按纯随机降级">
-             <input
-               data-testid="iq-loop-partial"
-               type="checkbox"
-               class="h-3.5 w-3.5 shrink-0 accent-primary"
-               :checked="iq.config.loopUsePartial"
-               @change="iq.config.loopUsePartial = ($event.target as HTMLInputElement).checked; iq.markDirty()"
-             />
-             <span class="truncate">可控随机</span>
-           </label>
-           <label class="flex min-w-0 items-center gap-1.5" title="队列随机是否包含 NSFW 条目">
-             <input
-               data-testid="iq-loop-nsfw"
-               type="checkbox"
-               class="h-3.5 w-3.5 shrink-0 accent-primary"
-               :checked="iq.config.loopAllowNsfw"
-               @change="iq.config.loopAllowNsfw = ($event.target as HTMLInputElement).checked; iq.markDirty()"
-             />
-             <span class="truncate">含NSFW</span>
-           </label>
-           <div v-if="iq.config.loopUsePartial && anchorCount === 0" class="col-span-2 text-[11px] text-amber-600">可控已开但画布为空，将按纯随机补货</div>
-          <label class="col-span-2 flex min-w-0 items-center gap-1.5" title="关即纯原图">
-            <input
-              data-testid="iq-embed-meta"
-              type="checkbox"
-              class="h-3.5 w-3.5 shrink-0 accent-primary"
-              :checked="iq.config.embedMeta"
-              @change="iq.config.embedMeta = ($event.target as HTMLInputElement).checked; iq.markDirty()"
-            />
-            <span class="truncate">图片内嵌参数<span class="text-muted-foreground">（关即纯原图）</span></span>
-          </label>
-        </div>
+        <IqLoopToggles
+          :loop-enabled="iq.config.loopEnabled"
+          :auto-random-on-start="iq.config.autoRandomOnStart"
+          :loop-use-partial="iq.config.loopUsePartial"
+          :loop-allow-nsfw="iq.config.loopAllowNsfw"
+          :embed-meta="iq.config.embedMeta"
+          :anchor-count="anchorCount"
+          @update:loopEnabled="iq.config.loopEnabled = $event; iq.markDirty()"
+          @update:autoRandomOnStart="iq.config.autoRandomOnStart = $event; iq.markDirty()"
+          @update:loopUsePartial="iq.config.loopUsePartial = $event; iq.markDirty()"
+          @update:loopAllowNsfw="iq.config.loopAllowNsfw = $event; iq.markDirty()"
+          @update:embedMeta="iq.config.embedMeta = $event; iq.markDirty()"
+        />
       </div>
 
       <!-- 接入卡 -->
@@ -319,26 +276,26 @@ onMounted(async () => {
         </div>
         <div class="flex items-center gap-2 text-xs">
           <span class="shrink-0 text-muted-foreground">路径</span>
-          <Input
+          <el-input
             data-testid="iq-api-base"
-            class="h-6 flex-1 text-xs"
+            size="small"
+            class="flex-1"
             disabled
             :model-value="conn.profile.apiBase"
             @blur="onApiBaseBlur"
           />
-          <Button size="sm" variant="ghost" class="h-6 shrink-0 px-1.5 text-[11px]" title="重置默认" @click="onResetApiBase">重置</Button>
+          <el-button size="small" text title="重置默认" @click="onResetApiBase">重置</el-button>
         </div>
         <div class="flex items-center gap-2 text-xs">
           <span class="shrink-0 text-muted-foreground">密钥</span>
           <div class="relative min-w-0 flex-1">
-            <Input
+            <el-input
               data-testid="iq-api-key"
-              class="h-6 w-full pr-7 text-xs"
+              size="small"
               :type="showKey ? 'text' : 'password'"
               disabled
               :model-value="''"
               :placeholder="keyPlaceholder"
-              
               @focus="onKeyFocus"
             />
             <button
@@ -383,13 +340,13 @@ onMounted(async () => {
             />
             <span>代理启用</span>
           </label>
-          <Input
+          <el-input
             data-testid="iq-proxy-url"
-            class="h-6 flex-1 text-xs"
+            size="small"
+            class="flex-1"
             disabled
             :placeholder="proxyPlaceholder"
             :model-value="''"
-            
             @focus="onProxyFocus"
           />
         </div>
@@ -402,7 +359,7 @@ onMounted(async () => {
 
     <!-- 底栏：恢复默认 + 测试结果（保存/测试已上移吸顶） -->
     <div class="flex flex-wrap items-center gap-2">
-      <Button data-testid="iq-reset-default" size="sm" variant="ghost" class="h-6 px-2 text-[11px]" @click="onResetDefault">恢复默认</Button>
+      <el-button data-testid="iq-reset-default" size="small" text @click="onResetDefault">恢复默认</el-button>
       <span v-if="iq.testResult" class="text-[11px]" :class="iq.testResult.ok ? 'text-green-600' : 'text-red-600'">
         {{ iq.testResult.message }}
       </span>

@@ -1,9 +1,7 @@
 <script setup lang="ts">
 import { ref, computed } from 'vue'
-import { Button } from '@/components/ui/button'
-import { Input } from '@/components/ui/input'
 import { useRulesStore } from '@/stores/rules'
-import { useToast } from '@/composables/useToast'
+import { notify } from '@/lib/notify'
 import RuleEditDialog from './RuleEditDialog.vue'
 import type { Rule } from '@/engine/ruleTypes'
 import type { RuleUpsertPayload } from '@/lib/db'
@@ -17,7 +15,6 @@ const props = withDefaults(defineProps<{
 })
 
 const rulesStore = useRulesStore()
-const { push } = useToast()
 
 const search = ref('')
 const onlyEnabled = ref(false)
@@ -26,12 +23,12 @@ const dialogMode = ref<'create' | 'edit'>('create')
 const editing = ref<Rule | null>(null)
 const showDeleted = ref(false)
 
-const TYPE_BADGE: Record<string, string> = {
-  mutex: 'bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-200',
-  requires: 'bg-blue-100 text-blue-800 dark:bg-blue-950 dark:text-blue-200',
-  excludes: 'bg-orange-100 text-orange-800 dark:bg-orange-950 dark:text-orange-200',
-  limit: 'bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-200',
-  isolated: 'bg-red-100 text-red-800 dark:bg-red-950 dark:text-red-200',
+const TYPE_MAP: Record<string, 'warning' | 'primary' | 'danger' | 'info'> = {
+  mutex: 'warning',
+  requires: 'primary',
+  excludes: 'warning',
+  limit: 'info',
+  isolated: 'danger',
 }
 
 const filtered = computed(() => {
@@ -65,14 +62,14 @@ async function onConfirm(payload: RuleUpsertPayload): Promise<void> {
   try {
     if (dialogMode.value === 'edit' && editing.value) {
       await rulesStore.saveRule(payload, editing.value.id)
-      push('规则已更新', 'success', 1200)
+      notify('规则已更新', 'success', 1200)
     } else {
       await rulesStore.saveRule(payload)
-      push('规则已创建', 'success', 1200)
+      notify('规则已创建', 'success', 1200)
     }
     showDialog.value = false
   } catch (e) {
-    push(`保存失败: ${String(e)}`, 'error')
+    notify(`保存失败: ${String(e)}`, 'error')
   }
 }
 
@@ -80,7 +77,7 @@ async function onToggle(rule: Rule, v: boolean): Promise<void> {
   try {
     await rulesStore.toggleRule(rule.id, v)
   } catch (e) {
-    push(`切换失败: ${String(e)}`, 'error')
+    notify(`切换失败: ${String(e)}`, 'error')
   }
 }
 
@@ -89,9 +86,9 @@ async function onDelete(rule: Rule): Promise<void> {
   if (!ok) return
   try {
     await rulesStore.deleteRule(rule.id)
-    push('规则已删除', 'success', 1200)
+    notify('规则已删除', 'success', 1200)
   } catch (e) {
-    push(`删除失败: ${String(e)}`, 'error')
+    notify(`删除失败: ${String(e)}`, 'error')
   }
 }
 </script>
@@ -99,22 +96,26 @@ async function onDelete(rule: Rule): Promise<void> {
 <template>
   <div data-testid="rule-list" class="flex min-h-0 flex-1 flex-col" role="list">
     <div class="flex shrink-0 items-center gap-2">
-      <Input v-model="search" data-testid="rule-search" class="h-7 flex-1 text-xs" placeholder="搜索规则名/消息…" />
-      <Button data-testid="rule-create-btn" size="sm" class="h-7 text-xs" @click="onCreate">+ 新建规则</Button>
+      <el-input v-model="search" data-testid="rule-search" size="small" class="flex-1" placeholder="搜索规则名/消息…" clearable />
+      <el-button data-testid="rule-create-btn" type="primary" size="small" @click="onCreate">+ 新建规则</el-button>
     </div>
     <label class="mt-1.5 flex shrink-0 items-center gap-1.5 text-[11px] text-muted-foreground">
-      <input v-model="onlyEnabled" type="checkbox" class="accent-primary" />
+      <el-switch v-model="onlyEnabled" size="small" />
       <span>仅看启用</span>
     </label>
     <p v-if="rulesStore.loadError" class="mt-1.5 shrink-0 rounded bg-amber-50 p-1.5 text-[11px] text-amber-700 dark:bg-amber-950 dark:text-amber-200">
       规则加载失败，仅内存规则可用：{{ rulesStore.loadError }}
     </p>
-    <div class="mt-2 min-h-0 flex-1 overflow-auto">
-      <div v-if="filtered.length === 0" class="flex min-h-[120px] flex-col items-center justify-center gap-1 p-4 text-center">
-        <p class="text-xs font-medium">暂无规则</p>
-        <p class="text-[11px] text-muted-foreground">新建一条 mutex 规则开始管理冲突</p>
+    <el-scrollbar class="mt-2 min-h-0 flex-1">
+      <div v-if="filtered.length === 0" class="p-2">
+        <el-empty description="暂无规则">
+          <template #description>
+            <p class="text-xs font-medium">暂无规则</p>
+            <p class="text-[11px] text-muted-foreground">新建一条 mutex 规则开始管理冲突</p>
+          </template>
+        </el-empty>
       </div>
-      <ul v-else class="flex flex-col gap-1.5">
+      <ul v-else class="flex flex-col gap-1.5 p-1">
         <li
           v-for="r in filtered"
           :key="r.id"
@@ -122,7 +123,7 @@ async function onDelete(rule: Rule): Promise<void> {
           role="listitem"
           class="flex items-center gap-2 rounded-md border px-2 py-1.5"
         >
-          <span class="rounded px-1.5 py-0.5 text-[10px] font-medium" :class="TYPE_BADGE[r.type] ?? ''">{{ r.type }}</span>
+          <el-tag size="small" :type="TYPE_MAP[r.type] ?? 'info'">{{ r.type }}</el-tag>
           <div class="min-w-0 flex-1">
             <p class="truncate text-xs font-medium" :title="r.name">{{ r.name }}</p>
             <p class="truncate text-[11px] text-muted-foreground" :title="r.message">{{ r.message }}</p>
@@ -130,20 +131,19 @@ async function onDelete(rule: Rule): Promise<void> {
               {{ dimLabel(r.sourceDimensionId) }} → {{ dimLabel(r.targetDimensionId) }}
             </p>
           </div>
-          <input
+          <el-switch
             :data-testid="`rule-toggle-${r.id}`"
-            type="checkbox"
-            class="accent-primary"
-            :checked="r.isEnabled"
+            :model-value="r.isEnabled"
             :title="r.isEnabled ? '点击禁用' : '点击启用'"
             :aria-label="`切换规则 ${r.name}`"
-            @change="onToggle(r, ($event.target as HTMLInputElement).checked)"
+            size="small"
+            @change="onToggle(r, $event as boolean)"
           />
           <button :data-testid="`rule-edit-${r.id}`" class="rounded px-1 text-xs hover:bg-accent" title="编辑规则" :aria-label="`编辑规则 ${r.name}`" @click="onEdit(r)">✎</button>
           <button :data-testid="`rule-del-${r.id}`" class="rounded px-1 text-xs hover:bg-accent hover:text-destructive" title="删除规则" :aria-label="`删除规则 ${r.name}`" @click="onDelete(r)">✕</button>
         </li>
       </ul>
-    </div>
+    </el-scrollbar>
     <p v-if="showDeleted" class="hidden" />
     <RuleEditDialog
       :open="showDialog"

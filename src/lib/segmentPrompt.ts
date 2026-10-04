@@ -4,6 +4,8 @@
  */
 import type { Dimension } from '@/engine/models'
 
+import { logger } from '@/lib/logger'
+
 const DIMENSION_DESCRIPTIONS: Record<string, string> = {
   gender: '性别表达：female/male/androgynous 等',
   ethnicity: '人种/族裔/肤色族属',
@@ -188,7 +190,8 @@ export async function copyInstructionPrompt(text: string): Promise<boolean> {
   try {
     await navigator.clipboard.writeText(text)
     return true
-  } catch {
+  } catch (e) {
+    logger.warn('segmentPrompt', 'clipboard 不可用，降级 textarea：', e)
     try {
       const ta = document.createElement('textarea')
       ta.value = text
@@ -199,7 +202,8 @@ export async function copyInstructionPrompt(text: string): Promise<boolean> {
       const ok = document.execCommand('copy')
       document.body.removeChild(ta)
       return ok
-    } catch {
+    } catch (e2) {
+      logger.warn('segmentPrompt', 'clipboard 降级失败：', e2)
       return false
     }
   }

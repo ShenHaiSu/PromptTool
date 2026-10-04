@@ -9,6 +9,8 @@
 import type { Dimension, Module } from '@/engine/models'
 import { GENERATE_MAX_ITEMS } from '@/lib/fragmentGeneratePrompt'
 import type { BatchCreatePayload } from '@/lib/db'
+import { isParsableJson } from '@/lib/jsonProbe'
+import { logger } from '@/lib/logger'
 
 export type FragmentRowStatus = 'ok' | 'duplicate_in_batch' | 'duplicate_in_db' | 'empty' | 'error'
 
@@ -79,18 +81,17 @@ function extractJsonBlocks(text: string): string[] {
     }
     if (end === -1) break
     const candidate = normalized.slice(start, end + 1)
-    try {
-      JSON.parse(candidate)
+    if (isParsableJson(candidate)) {
       blocks.push(candidate)
       i = end + 1
-    } catch {
+    } else {
       i = start + 1
     }
   }
   if (blocks.length === 0) {
     const trimmed = normalized.trim()
     if (trimmed.startsWith('{') && trimmed.endsWith('}')) {
-      try { JSON.parse(trimmed); blocks.push(trimmed) } catch {}
+      if (isParsableJson(trimmed)) blocks.push(trimmed)
     }
   }
   return blocks
@@ -195,7 +196,10 @@ function parseJsonInput(text: string): { items: RawFragmentItem[]; errors: strin
       })
       return { items, errors, warnings }
     }
-  } catch { /* 非整体 JSON，走块提取 */ }
+  } catch (e) {
+    // 非整体 JSON，走块提取
+    logger.warn('fragmentGenerateParse', '整体 JSON 解析失败，回退块提取：', e)
+  }
   const blocks = extractJsonBlocks(text)
   if (blocks.length === 0) return { items, errors: ['无法识别的 pmf-fragments 格式'], warnings }
   for (const b of blocks) {

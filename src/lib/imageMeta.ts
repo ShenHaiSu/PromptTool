@@ -4,6 +4,7 @@
  * 前端 imageQueueApi.ts EmbeddedImageMeta。缺字段（老图无 taskId）显示 '—' 而非崩。
  */
 import type { EmbeddedImageMeta } from '@/lib/imageQueueApi'
+import { logger } from '@/lib/logger'
 
 export const META_DASH = '—'
 
@@ -14,7 +15,8 @@ export function formatCreatedAt(sec: number | null | undefined): string {
     const d = new Date(sec * 1000)
     if (Number.isNaN(d.getTime())) return META_DASH
     return d.toLocaleString()
-  } catch {
+  } catch (e) {
+    logger.warn('imageMeta', '格式化创建时间失败，回退 META_DASH：', e)
     return META_DASH
   }
 }

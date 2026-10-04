@@ -2,6 +2,7 @@
  * 轻量词库变更事件总线 — 无外部依赖
  * 事件：library:changed
  */
+import { logger } from './logger'
 type Handler = (payload?: unknown) => void
 
 const listeners = new Map<string, Set<Handler>>()
@@ -25,8 +26,8 @@ export function emit(event: string, payload?: unknown): void {
   for (const h of [...set]) {
     try {
       h(payload)
-    } catch {
-      /* ignore handler error */
+    } catch (e) {
+      logger.warn('libraryEvents', `事件处理器异常（${event}）：`, e)
     }
   }
 }

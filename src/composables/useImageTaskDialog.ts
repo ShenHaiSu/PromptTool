@@ -1,12 +1,13 @@
 /**
  * 生图任务详情 Dialog service（need06 复用 Dialog）。
- * 对齐 `useToast` 的模块级单例模式：任意卡片 `open(task)` 拉起，
+ * 对齐 `notify` 的模块级单例模式：任意卡片 `open(task)` 拉起，
  * 顶层 `ImageTaskDetailDialog` 订阅同一份 state 做展示。
  * 卡片身处虚拟化 `transform` 行容器内，Dialog 本体挂 App 顶层 + Teleport 到 body，
  * 从根上避开 `fixed` 被祖先 `transform` 劫持的问题。
  */
 import { ref } from 'vue'
-import { useToast } from '@/composables/useToast'
+import { notify } from '@/lib/notify'
+import { logger } from '@/lib/logger'
 import { IQ_RATIOS, IQ_SIZES } from '@/lib/imageQueue'
 import { readImageMeta, type EmbeddedImageMeta, type ImageTaskView } from '@/lib/imageQueueApi'
 import { useImageQueueStore } from '@/stores/imageQueue'
@@ -18,7 +19,6 @@ const loading = ref(false)
 const reusing = ref(false)
 
 export function useImageTaskDialog() {
-  const { push } = useToast()
 
    /** 拉起详情：先开骨架，异步读内嵌 meta；无内嵌/失败则 toast 并自动关闭。2a：无落盘时仍展示文件名三行。 */
    async function open(detail: ImageTaskView): Promise<void> {
@@ -34,13 +34,13 @@ export function useImageTaskDialog() {
      try {
        const meta = await readImageMeta(detail.filePath)
        if (!meta) {
-         push('该图无内嵌参数（可能为旧图/外部图）', 'error', 2500)
+         notify('该图无内嵌参数（可能为旧图/外部图）', 'error', 2500)
          close()
          return
        }
        embedded.value = meta
      } catch (e) {
-       push(`读取内嵌参数失败：${String(e)}`, 'error', 2500)
+       notify(`读取内嵌参数失败：${String(e)}`, 'error', 2500)
        close()
      } finally {
        loading.value = false
@@ -58,7 +58,8 @@ export function useImageTaskDialog() {
     if (!text) return
     try {
       await navigator.clipboard.writeText(text)
-    } catch {
+    } catch (e) {
+      logger.warn('ImageTaskDialog', 'clipboard 不可用，降级 textarea：', e)
       const ta = document.createElement('textarea')
       ta.value = text
       ta.style.position = 'fixed'
@@ -68,7 +69,7 @@ export function useImageTaskDialog() {
       document.execCommand('copy')
       document.body.removeChild(ta)
     }
-    push('已复制 prompt', 'success', 1200)
+    notify('已复制 prompt', 'success', 1200)
   }
 
   /**
@@ -81,7 +82,7 @@ export function useImageTaskDialog() {
     if (!meta || reusing.value) return
     const prompt = meta.prompt.trim()
     if (!prompt) {
-      push('内嵌 prompt 为空，无法复用', 'warning')
+      notify('内嵌 prompt 为空，无法复用', 'warning')
       return
     }
     const iq = useImageQueueStore()
@@ -90,7 +91,7 @@ export function useImageTaskDialog() {
     if ((IQ_SIZES as readonly string[]).includes(meta.size)) size = meta.size
     if ((IQ_RATIOS as readonly string[]).includes(meta.ratio)) ratio = meta.ratio
     if (size !== meta.size || ratio !== meta.ratio) {
-      push('内嵌 size/ratio 已失效，已用当前配置入队', 'warning')
+      notify('内嵌 size/ratio 已失效，已用当前配置入队', 'warning')
     }
     reusing.value = true
     try {
@@ -98,7 +99,7 @@ export function useImageTaskDialog() {
         { prompt, irHash: meta.irHash ?? null, size, ratio },
       ])
       if (enqueued > 0) {
-        push(`已复用参数入队（${size} ${ratio}），可开始生图`, 'success', 2000)
+        notify(`已复用参数入队（${size} ${ratio}），可开始生图`, 'success', 2000)
         close()
       }
     } finally {

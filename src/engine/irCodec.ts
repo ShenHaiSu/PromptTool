@@ -4,6 +4,7 @@
  */
 import { IR_SNAPSHOT_VERSION, PromptIR } from '@/engine/models'
 import type { Finding, IRSegment } from '@/engine/models'
+import { logger } from '@/lib/logger'
 
 function isRecord(v: unknown): v is Record<string, unknown> {
   return typeof v === 'object' && v !== null
@@ -67,7 +68,8 @@ export function parsePromptIr(json: string): PromptIR {
   let raw: unknown
   try {
     raw = JSON.parse(json)
-  } catch {
+  } catch (e) {
+    logger.warn('irCodec', '解析 IR 快照 JSON 失败（已置空）：', e)
     return new PromptIR([], ['快照解析失败，已置空'], [], IR_SNAPSHOT_VERSION)
   }
   if (!isRecord(raw)) {
@@ -97,7 +99,8 @@ export function isLegacySnapshot(json: string): boolean {
     const raw: unknown = JSON.parse(json)
     if (!isRecord(raw)) return true
     return !Array.isArray(raw.findings) || raw.version !== IR_SNAPSHOT_VERSION
-  } catch {
+  } catch (e) {
+    logger.warn('irCodec', '探测老快照失败（按老快照处理）：', e)
     return true
   }
 }

@@ -3,6 +3,8 @@
  * 契约：docs/need01/05_结果解析与批量回填设计.md 与 06_数据与接口契约.md
  */
 import type { Dimension, Module } from '@/engine/models'
+import { isParsableJson } from '@/lib/jsonProbe'
+import { logger } from '@/lib/logger'
 
 export const TRANSLATION_MAX_ZH_LEN = 500
 export const TRANSLATION_MAX_ITEMS_PER_UPDATE = 1000
@@ -88,11 +90,10 @@ export function extractTranslationJsonBlocks(text: string): string[] {
     }
     if (end === -1) break
     const candidate = normalized.slice(start, end + 1)
-    try {
-      JSON.parse(candidate)
+    if (isParsableJson(candidate)) {
       blocks.push(candidate)
       i = end + 1
-    } catch {
+    } else {
       // Not valid JSON, skip this brace and continue search
       i = start + 1
     }
@@ -101,7 +102,7 @@ export function extractTranslationJsonBlocks(text: string): string[] {
   if (blocks.length === 0) {
     const trimmed = normalized.trim()
     if (trimmed.startsWith('{') && trimmed.endsWith('}')) {
-      try { JSON.parse(trimmed); blocks.push(trimmed) } catch {}
+      if (isParsableJson(trimmed)) blocks.push(trimmed)
     }
   }
   return blocks
@@ -169,6 +170,7 @@ export function parseTranslationBlock(block: string): ParsedTranslationBlock {
   try {
     parsed = JSON.parse(block)
   } catch (e) {
+    logger.warn('translationParse', 'pmf-translation 块解析失败：', e)
     return {
       kind: 'unknown',
       items: [],

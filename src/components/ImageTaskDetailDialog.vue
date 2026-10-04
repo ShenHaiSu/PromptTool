@@ -1,12 +1,10 @@
- <script setup lang="ts">
- import { onBeforeUnmount, onMounted } from 'vue'
- import { Button } from '@/components/ui/button'
- import { Card } from '@/components/ui/card'
- import { useImageTaskDialog } from '@/composables/useImageTaskDialog'
- import { dbRevealInExplorer } from '@/lib/db'
- import { useToast } from '@/composables/useToast'
- const dialog = useImageTaskDialog()
- const { push } = useToast()
+<script setup lang="ts">
+import { onBeforeUnmount, onMounted } from 'vue'
+import { logger } from '@/lib/logger'
+import { useImageTaskDialog } from '@/composables/useImageTaskDialog'
+import { dbRevealInExplorer } from '@/lib/db'
+import { notify } from '@/lib/notify'
+const dialog = useImageTaskDialog()
  function onKeydown(e: KeyboardEvent): void {
    if (e.key === 'Escape' && dialog.opened.value) dialog.close()
  }
@@ -15,7 +13,8 @@
    if (!t) return
    try {
      await navigator.clipboard.writeText(t)
-   } catch {
+  } catch (err) {
+    logger.warn('ImageTaskDetail', 'clipboard降级', err)
      const ta = document.createElement('textarea')
      ta.value = t
      ta.style.position = 'fixed'
@@ -25,7 +24,7 @@
      document.execCommand('copy')
      document.body.removeChild(ta)
    }
-   push('已复制文件名', 'success', 1200)
+   notify('已复制文件名', 'success', 1200)
  }
  async function onRevealFile(): Promise<void> {
    const p = dialog.task.value?.filePath
@@ -33,7 +32,7 @@
    try {
      await dbRevealInExplorer(p)
    } catch (err) {
-     push(`定位失败：${err instanceof Error ? err.message : String(err)}`, 'error')
+     notify(`定位失败：${err instanceof Error ? err.message : String(err)}`, 'error')
    }
  }
  onMounted(() => {
@@ -57,7 +56,7 @@
       class="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
       @click.self="dialog.close()"
     >
-       <Card class="max-h-[80vh] w-full max-w-lg overflow-auto p-4">
+       <el-card shadow="never" class="max-h-[80vh] w-full max-w-lg overflow-auto">
          <h4 class="text-sm font-semibold">生图任务详情</h4>
          <!-- 2a 文件名三行：expectedStem / filename / filePath -->
          <dl v-if="dialog.task.value" data-testid="image-task-detail-files" class="mt-2 flex flex-col gap-1 font-mono text-[11px]">
@@ -118,43 +117,15 @@
              {{ dialog.embedded.value.prompt }}
            </p>
            <div class="mt-3 flex justify-end gap-2">
-             <Button
-               data-testid="image-task-detail-copy"
-               size="sm"
-               variant="outline"
-               class="h-7 text-xs"
-               @click="dialog.copyPrompt()"
-               >复制 prompt</Button
-             >
-             <Button
-               data-testid="image-task-reuse"
-               size="sm"
-               class="h-7 text-xs"
-               :disabled="dialog.reusing.value"
-               @click="dialog.reuseParams()"
-               >{{ dialog.reusing.value ? '入队中…' : '复用参数下单' }}</Button
-             >
-             <Button
-               data-testid="image-task-detail-close"
-               size="sm"
-               variant="ghost"
-               class="h-7 text-xs"
-               @click="dialog.close()"
-               >关闭</Button
-             >
+            <el-button data-testid="image-task-detail-copy" plain size="small" @click="dialog.copyPrompt()">复制 prompt</el-button>
+            <el-button data-testid="image-task-reuse" type="primary" size="small" :disabled="dialog.reusing.value" @click="dialog.reuseParams()">{{ dialog.reusing.value ? '入队中…' : '复用参数下单' }}</el-button>
+            <el-button data-testid="image-task-detail-close" text size="small" @click="dialog.close()">关闭</el-button>
            </div>
          </template>
          <div v-else class="mt-3 flex justify-end">
-           <Button
-             data-testid="image-task-detail-close"
-             size="sm"
-             variant="ghost"
-             class="h-7 text-xs"
-             @click="dialog.close()"
-             >关闭</Button
-           >
+          <el-button data-testid="image-task-detail-close" text size="small" @click="dialog.close()">关闭</el-button>
          </div>
-       </Card>
+       </el-card>
      </div>
    </Teleport>
  </template>

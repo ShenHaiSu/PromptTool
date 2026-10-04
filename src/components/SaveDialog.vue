@@ -1,12 +1,8 @@
 <script setup lang="ts">
 /**
- * SaveDialog — 通用保存弹窗
- * mode: 'assembly' 保存方案 | 'template' 另存为模板 | 'rename' 重命名
+ * SaveDialog — 通用保存弹窗（EP化：el-dialog + el-form）
  */
 import { ref, watch, computed } from 'vue'
-import { Button } from '@/components/ui/button'
-import { Input } from '@/components/ui/input'
-import { Card } from '@/components/ui/card'
 
 type Mode = 'assembly' | 'template' | 'rename'
 
@@ -81,46 +77,47 @@ function onKeydown(e: KeyboardEvent): void {
     @click.self="onClose"
     @keydown="onKeydown"
   >
-    <Card
+    <el-dialog
+      :model-value="open"
+      :title="title"
+      width="420px"
+      destroy-on-close
+      :append-to-body="false"
       data-testid="save-dialog"
-      class="w-full max-w-md p-4 shadow-xl"
+      @close="onClose"
       @click.stop
     >
-      <h3 class="text-sm font-semibold">{{ title }}</h3>
       <p v-if="mode === 'assembly'" class="mt-1 text-xs text-muted-foreground">留空则自动以日期+Prompt 前 30 字命名</p>
-      <div class="mt-3 space-y-3">
-        <label class="flex flex-col gap-1">
-          <span class="text-xs text-muted-foreground">{{ mode === 'template' ? '模板名称 *' : '标题' }}</span>
-          <Input
+      <el-form label-width="96px" class="mt-3" @submit.prevent>
+        <el-form-item :label="mode === 'template' ? '模板名称' : '标题'" :required="mode !== 'assembly'">
+          <el-input
             data-testid="save-dialog-name"
             v-model="name"
             :placeholder="namePlaceholder"
-            class="h-8 text-sm"
             autofocus
           />
-        </label>
-        <label v-if="showDesc" class="flex flex-col gap-1">
-          <span class="text-xs text-muted-foreground">描述（可选）</span>
-          <textarea
+        </el-form-item>
+        <el-form-item v-if="showDesc" label="描述">
+          <el-input
             data-testid="save-dialog-desc"
             v-model="desc"
+            type="textarea"
+            :rows="2"
             placeholder="一句话描述该模板适用场景"
-            rows="2"
-            class="min-h-[56px] w-full rounded-md border bg-background px-3 py-2 text-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
           />
-        </label>
-      </div>
-      <div class="mt-4 flex justify-end gap-2">
-        <Button data-testid="save-dialog-cancel" variant="ghost" size="sm" class="h-7 text-xs" @click="onClose">取消</Button>
-        <Button
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button data-testid="save-dialog-cancel" text size="small" @click="onClose">取消</el-button>
+        <el-button
           data-testid="save-dialog-confirm"
-          size="sm"
-          class="h-7 text-xs"
+          type="primary"
+          size="small"
           :disabled="mode !== 'assembly' && !name.trim()"
           @click="onConfirm"
-        >确定</Button>
-      </div>
+        >确定</el-button>
+      </template>
       <p class="mt-2 text-[11px] text-muted-foreground">Ctrl+Enter 快速确认 · Esc 关闭</p>
-    </Card>
+    </el-dialog>
   </div>
 </template>

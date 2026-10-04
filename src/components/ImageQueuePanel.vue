@@ -1,7 +1,7 @@
- <script setup lang="ts">
- import { ref, computed, onMounted, onBeforeUnmount, nextTick, watch } from 'vue'
- import { Button } from '@/components/ui/button'
- import { useToast } from '@/composables/useToast'
+<script setup lang="ts">
+import { ref, computed, onMounted, onBeforeUnmount, nextTick, watch } from 'vue'
+import { logger } from '@/lib/logger'
+import { notify } from '@/lib/notify'
  import { dbRevealInExplorer } from '@/lib/db'
  import { iqOpenOutputDir, iqFindByFilename } from '@/lib/imageQueueApi'
  import { useImageQueueStore } from '@/stores/imageQueue'
@@ -19,7 +19,6 @@ import { isConnectionReady } from '@/lib/connectionProfile'
  function gotoModel(): void {
    emit('switch-to-model')
  }
- const { push } = useToast()
  const taskDialog = useImageTaskDialog()
  const statsUi = useStatsReport()
  const running = computed(() => iq.isRunning())
@@ -70,12 +69,12 @@ async function onOpenOutput(): Promise<void> {
     if (!iq.config.outputDir.trim()) {
       // need07：空配置走后端解析+保活+打开，不再透传 <data_dir> 占位符
       const dir = await iqOpenOutputDir()
-      push(`已打开 ${dir}`, 'success', 1500)
+      notify(`已打开 ${dir}`, 'success', 1500)
     } else {
       await dbRevealInExplorer(iq.config.outputDir.trim())
     }
   } catch (err) {
-    push(`打开失败：${err instanceof Error ? err.message : String(err)}`, 'error')
+    notify(`打开失败：${err instanceof Error ? err.message : String(err)}`, 'error')
   }
 }
 
@@ -90,7 +89,7 @@ async function onOpenOutput(): Promise<void> {
  async function onFindByFilename(): Promise<void> {
    const q = filenameQuery.value.trim()
    if (!q) {
-     push('请输入文件名再反查', 'warning', 1500)
+     notify('请输入文件名再反查', 'warning', 1500)
      return
    }
    if (searching.value) return
@@ -98,7 +97,7 @@ async function onOpenOutput(): Promise<void> {
    try {
      const found = await iqFindByFilename(q)
      if (!found) {
-       push('未找到（已清理的任务无法反查）', 'warning', 2500)
+       notify('未找到（已清理的任务无法反查）', 'warning', 2500)
        return
      }
      const idx = iq.order.indexOf(found.id)
@@ -107,14 +106,14 @@ async function onOpenOutput(): Promise<void> {
          const vz = virtualizer.value as unknown as { scrollToIndex?: (i: number, o?: unknown) => void }
          if (typeof vz.scrollToIndex === 'function') vz.scrollToIndex(idx, { align: 'center' })
          else parentRef.value?.scrollTo({ top: Math.max(0, idx * 128 - 100) })
-       } catch { /* 滚动失败不阻断高亮+详情 */ }
+        } catch (err) { logger.warn('ImageQueue', 'scrollToIndex降级', err) }
      }
      if (highlightTimer) clearTimeout(highlightTimer)
      highlightId.value = found.id
      highlightTimer = setTimeout(() => { highlightId.value = null }, 2000)
      await taskDialog.open(found)
    } catch (err) {
-     push(`反查失败：${err instanceof Error ? err.message : String(err)}`, 'error')
+     notify(`反查失败：${err instanceof Error ? err.message : String(err)}`, 'error')
    } finally {
      searching.value = false
    }
@@ -148,7 +147,7 @@ onMounted(async () => {
   try {
     await iq.loadConfig()
     conn.syncFromModel()
-  } catch { /* 降级：缓存/默认 */ }
+  } catch (err) { logger.warn('ImageQueue', 'loadConfig降级', err) }
   await iq.initQueue()
 })
 
@@ -164,33 +163,28 @@ onMounted(async () => {
   <section data-testid="image-queue" class="flex min-h-0 flex-1 flex-col overflow-hidden">
     <!-- 运行条 -->
     <div data-testid="iq-runbar" class="relative flex shrink-0 flex-wrap items-center gap-2 px-3 py-2">
-      <Button
+      <el-button
         data-testid="iq-start"
-        size="sm"
-        class="h-7 text-xs"
+        type="primary"
+        size="small"
         :disabled="running"
         @click="onStart"
-        >{{ iq.order.length > 0 && iq.stats.stopped ? '继续' : '开始' }}</Button
-      >
-      <Button
+      >{{ iq.order.length > 0 && iq.stats.stopped ? '继续' : '开始' }}</el-button>
+      <el-button
         data-testid="iq-stop"
-        size="sm"
-        variant="outline"
-        class="h-7 text-xs"
+        plain
+        size="small"
         :disabled="!running"
         @click="onStop"
-        >停止</Button
-      >
-      <Button
+      >停止</el-button>
+      <el-button
         data-testid="iq-enqueue-current"
-        size="sm"
-        variant="outline"
-        class="h-7 text-xs"
+        plain
+        size="small"
         @click="onEnqueueCurrent"
-        >入队当前结果</Button
-      >
+      >入队当前结果</el-button>
         <span data-testid="iq-stats" class="text-[11px] text-muted-foreground">{{ statsText }}</span>
-       <Button data-testid="iq-stats-report" size="sm" variant="outline" class="h-7 text-xs" @click="statsUi.open()">📊 报表</Button>
+       <el-button data-testid="iq-stats-report" plain size="small" @click="statsUi.open()">📊 报表</el-button>
         <span v-if="iq.stats.consecFail > 0" data-testid="iq-consec" class="text-[11px] text-red-600">
           连续失败 {{ iq.stats.consecFail }}/5
         </span>
@@ -203,14 +197,13 @@ onMounted(async () => {
            class="h-7 w-44 rounded border bg-background px-2 text-xs outline-none focus:border-primary"
            @keydown.enter="onFindByFilename"
          />
-         <Button
+         <el-button
            data-testid="iq-filename-go"
-           size="sm"
-           variant="outline"
-           class="h-7 text-xs"
+           plain
+           size="small"
            :disabled="searching"
            @click="onFindByFilename"
-         >{{ searching ? '查找中…' : '反查' }}</Button>
+         >{{ searching ? '查找中…' : '反查' }}</el-button>
        </div>
        <button
          class="ml-auto flex items-center gap-1.5 text-[11px]"
@@ -246,7 +239,7 @@ onMounted(async () => {
       class="flex h-[160px] shrink-0 flex-col items-center justify-center gap-2 p-4 text-center text-xs text-muted-foreground"
     >
       <span>暂无生图任务 — 先配好密钥，再从批量工厂入队</span>
-      <Button size="sm" variant="outline" class="h-7 text-xs" @click="onGotoPrompt">去批量工厂随机</Button>
+      <el-button size="small" plain @click="onGotoPrompt">去批量工厂随机</el-button>
     </div>
      <div v-else ref="parentRef" data-testid="iq-virtual-scroll" class="min-h-0 flex-1 overflow-auto border-t">
        <div :style="{ height: totalSize + 'px', width: '100%', position: 'relative' }">
@@ -273,12 +266,8 @@ onMounted(async () => {
 
     <!-- 底部栏 -->
     <div class="flex shrink-0 items-center gap-2 border-t px-3 py-2">
-      <Button data-testid="iq-clear-finished" size="sm" variant="ghost" class="h-7 text-xs" @click="onClearFinished">
-        清空已完成
-      </Button>
-      <Button data-testid="iq-open-output" size="sm" variant="outline" class="h-7 text-xs" @click="onOpenOutput">
-        打开输出目录
-      </Button>
+      <el-button data-testid="iq-clear-finished" text size="small" @click="onClearFinished">清空已完成</el-button>
+      <el-button data-testid="iq-open-output" plain size="small" @click="onOpenOutput">打开输出目录</el-button>
     </div>
   </section>
 </template>

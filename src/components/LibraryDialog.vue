@@ -1,14 +1,13 @@
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
-import { Button } from '@/components/ui/button'
-import { useToast } from '@/composables/useToast'
+import { logger } from '@/lib/logger'
+import { notify } from '@/lib/notify'
 import { dbExportLibrary, dbImportLibraryText, dbGetDefaultExportDir, dbExportLibraryToDir, dbRevealInExplorer } from '@/lib/db'
 import { displayPath } from '@/lib/pathDisplay'
 import type { ImportMode, LibraryImportReport } from '@/lib/db'
 
 const emit = defineEmits<{ (e: 'close'): void; (e: 'imported'): void }>()
 
-const { push } = useToast()
 const exporting = ref(false)
 const importing = ref(false)
 const pickingDir = ref(false)
@@ -30,14 +29,15 @@ onMounted(async () => {
   try {
     const saved = localStorage.getItem(LS_KEY)
     if (saved && saved.trim()) exportDir.value = saved.trim()
-  } catch { /* ignore */ }
+  } catch (err) { logger.warn('Library', 'readExportDir', err) }
   try {
     const d = await dbGetDefaultExportDir()
     defaultDir.value = d
     if (!exportDir.value) {
       // keep empty so placeholder shows default; but store for fallback
     }
-  } catch {
+  } catch (err) {
+    logger.warn('Library', 'defaultExportDir降级', err)
     defaultDir.value = ''
   }
 })
@@ -52,11 +52,11 @@ async function onPickDir(): Promise<void> {
     const dir = Array.isArray(picked) ? (picked[0] ?? null) : picked
     if (typeof dir === 'string' && dir.trim()) {
       exportDir.value = dir.trim()
-      try { localStorage.setItem(LS_KEY, exportDir.value) } catch { /* ignore */ }
+      try { localStorage.setItem(LS_KEY, exportDir.value) } catch (err) { logger.warn('Library', 'persistExportDir', err) }
     }
     // null / cancel => keep原值，无提示
   } catch (err) {
-    push(`选择文件夹失败: ${String(err)}`, 'error')
+    notify(`选择文件夹失败: ${String(err)}`, 'error')
   } finally {
     pickingDir.value = false
   }
@@ -87,7 +87,7 @@ async function onExport(): Promise<void> {
         const res = await dbExportLibraryToDir(targetDir)
         lastExportPath.value = res.path
         lastFilename.value = res.filename
-        push(`已导出至 ${res.path}`, 'success', 2500)
+        notify(`已导出至 ${res.path}`, 'success', 2500)
         return
       } catch (err) {
         // fall through to Blob fallback, but toast warning context
@@ -96,10 +96,10 @@ async function onExport(): Promise<void> {
         try {
           const json = await dbExportLibrary()
           triggerBlobDownload(json)
-          push(`已通过浏览器下载导出（落盘失败，已自动降级）: ${msg}`, 'warning', 4000)
+          notify(`已通过浏览器下载导出（落盘失败，已自动降级）: ${msg}`, 'warning', 4000)
           return
         } catch (e2) {
-          push(`导出失败: ${msg} / 降级亦失败: ${String(e2)}`, 'error', 4000)
+          notify(`导出失败: ${msg} / 降级亦失败: ${String(e2)}`, 'error', 4000)
           return
         }
       }
@@ -107,9 +107,9 @@ async function onExport(): Promise<void> {
     // No targetDir (default unknown) -> legacy Blob path
     const json = await dbExportLibrary()
     triggerBlobDownload(json)
-    push('词库已导出为 JSON', 'success', 1500)
+    notify('词库已导出为 JSON', 'success', 1500)
   } catch (err) {
-    push(`导出失败: ${String(err)}`, 'error')
+    notify(`导出失败: ${String(err)}`, 'error')
   } finally {
     exporting.value = false
   }
@@ -120,15 +120,15 @@ async function onOpenDir(): Promise<void> {
   if (!p) return
   try {
     await dbRevealInExplorer(p)
-  } catch {
-    // fallback: try opener plugin directly
+  } catch (err) {
+    logger.warn('Library', 'reveal降级走opener', err)
     try {
       const mod: any = await import('@tauri-apps/plugin-opener')
       const fn = mod.openPath ?? mod.open
       if (typeof fn === 'function') await fn(p)
       else throw new Error('opener unavailable')
     } catch (err) {
-      push(`无法打开所在文件夹: ${String(err)}`, 'error')
+      notify(`无法打开所在文件夹: ${String(err)}`, 'error')
     }
   }
 }
@@ -153,11 +153,11 @@ async function onFileSelected(e: Event): Promise<void> {
   try {
     const text = await file.text()
     report.value = await dbImportLibraryText(text, mode.value)
-    push('词库导入完成', 'success', 1500)
+    notify('词库导入完成', 'success', 1500)
     emit('imported')
   } catch (err) {
     error.value = String(err)
-    push(`导入失败: ${String(err)}`, 'error')
+    notify(`导入失败: ${String(err)}`, 'error')
   } finally {
     importing.value = false
     input.value = ''
@@ -177,7 +177,7 @@ const totalErrors = (): number => report.value?.errors.length ?? 0
       <!-- 标题 -->
       <div class="flex items-center justify-between border-b px-4 py-3">
         <h2 class="text-base font-semibold">词库管理</h2>
-        <Button data-testid="library-close" variant="ghost" size="sm" @click="close">✕</Button>
+        <el-button data-testid="library-close" text size="small" @click="close">✕</el-button>
       </div>
 
       <div class="min-h-0 flex-1 space-y-5 overflow-y-auto p-4">
@@ -194,24 +194,20 @@ const totalErrors = (): number => report.value?.errors.length ?? 0
               readonly
               class="flex-1 truncate rounded-md border bg-muted/30 px-2 py-1.5 text-xs text-muted-foreground"
             />
-            <Button
+            <el-button
               data-testid="library-export-pick-dir"
-              variant="outline"
-              size="sm"
+              plain
+              size="small"
               :disabled="exporting || pickingDir"
               @click="onPickDir"
-            >
-              {{ pickingDir ? '选择中…' : '选择文件夹' }}
-            </Button>
+            >{{ pickingDir ? '选择中…' : '选择文件夹' }}</el-button>
           </div>
           <p class="mb-2 text-xs text-muted-foreground">提示：默认 data/output；已选目录将自动记忆</p>
-          <Button data-testid="library-export-btn" variant="outline" size="sm" :disabled="exporting" @click="onExport">
-            {{ exporting ? '导出中…' : '导出词库 JSON' }}
-          </Button>
+          <el-button data-testid="library-export-btn" plain size="small" :disabled="exporting" @click="onExport">{{ exporting ? '导出中…' : '导出词库 JSON' }}</el-button>
           <!-- Need02: 落盘结果 + 打开文件夹 -->
           <div v-if="lastExportPath" data-testid="library-export-result" class="mt-2 rounded-md border bg-muted/30 px-2 py-2 text-xs">
             <p class="break-all text-muted-foreground">已落盘至 {{ displayPath(lastExportPath ?? '') }}</p>
-            <Button data-testid="library-export-open-dir" variant="ghost" size="sm" class="mt-1 h-6 px-2 text-xs" @click="onOpenDir">打开文件夹</Button>
+            <el-button data-testid="library-export-open-dir" text size="small" @click="onOpenDir">打开文件夹</el-button>
           </div>
         </section>
 
@@ -229,9 +225,7 @@ const totalErrors = (): number => report.value?.errors.length ?? 0
             @change="onFileSelected"
           />
           <div class="flex flex-wrap items-center gap-2">
-            <Button data-testid="library-pick-file" variant="outline" size="sm" :disabled="importing" @click="onPickFile">
-              {{ importing ? '导入中…' : '选择文件' }}
-            </Button>
+            <el-button data-testid="library-pick-file" plain size="small" :disabled="importing" @click="onPickFile">{{ importing ? '导入中…' : '选择文件' }}</el-button>
             <span v-if="fileName" data-testid="library-file-name" class="truncate text-xs text-muted-foreground">{{ fileName }}</span>
           </div>
           <div class="mt-2 flex items-center gap-4 text-sm">
@@ -259,15 +253,13 @@ const totalErrors = (): number => report.value?.errors.length ?? 0
             <p data-testid="library-report-tags">标签：新增 {{ report.tagsCreated }} · 跳过 {{ report.tagsSkipped }}</p>
           </div>
           <div v-if="totalErrors() > 0">
-            <Button
+            <el-button
               data-testid="library-report-errors-toggle"
-              variant="ghost"
-              size="sm"
-              class="h-6 px-2 text-xs text-amber-600"
+              text
+              size="small"
+              class="text-amber-600"
               @click="showErrors = !showErrors"
-            >
-              冲突/错误：{{ totalErrors() }} 条 {{ showErrors ? '▲' : '▼' }}
-            </Button>
+            >冲突/错误：{{ totalErrors() }} 条 {{ showErrors ? '▲' : '▼' }}</el-button>
             <ul v-if="showErrors" data-testid="library-report-errors" class="mt-1 max-h-28 space-y-0.5 overflow-y-auto rounded bg-amber-50 p-2 text-xs text-amber-900 dark:bg-amber-950 dark:text-amber-100">
               <li v-for="(er, i) in report.errors" :key="i">· {{ er }}</li>
             </ul>

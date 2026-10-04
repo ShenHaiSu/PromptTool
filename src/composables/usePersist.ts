@@ -5,6 +5,8 @@
  */
 import { watch, type Ref } from 'vue'
 
+import { logger } from '@/lib/logger'
+
 const SASH_KEY = 'pmf:sash'
 const SASH_LEGACY = 'pmf-sash'
 const THEME_KEY = 'pmf:theme'
@@ -17,7 +19,8 @@ export type ThemeMode = 'light' | 'dark'
 function safeGet(key: string): string | null {
   try {
     return localStorage.getItem(key)
-  } catch {
+  } catch (e) {
+    logger.warn('usePersist', `读取 ${key} 失败：`, e)
     return null
   }
 }
@@ -25,8 +28,9 @@ function safeGet(key: string): string | null {
 function safeSet(key: string, value: string): void {
   try {
     localStorage.setItem(key, value)
-  } catch {
-    /* quota / disabled */
+  } catch (e) {
+    // quota / disabled
+    logger.warn('usePersist', `写入 ${key} 失败（quota/disabled）：`, e)
   }
 }
 
@@ -42,8 +46,8 @@ export function persistSash(leftFrac: Ref<number>, centerFrac: Ref<number>): voi
         const payload = JSON.stringify([leftFrac.value, centerFrac.value])
         safeSet(SASH_KEY, payload)
         safeSet(SASH_LEGACY, payload)
-      } catch {
-        /* ignore */
+      } catch (e) {
+        logger.warn('usePersist', '持久化 sash 比例失败：', e)
       }
     },
     { flush: 'sync' },
@@ -91,8 +95,8 @@ export function loadGeometry(): Geometry | null {
       if (g.width < MIN_GEOMETRY.width || g.height < MIN_GEOMETRY.height) return null
       return g
     }
-  } catch {
-    /* ignore */
+  } catch (e) {
+    logger.warn('usePersist', '解析持久化窗口几何失败：', e)
   }
   return null
 }
@@ -107,12 +111,14 @@ export function persistGeometry(): void {
       safeSet(GEOMETRY_KEY, payload)
       safeSet(GEOMETRY_LEGACY, payload)
       // 可选 Rust 侧：invoke('save_window_state', { width, height }) — best effort
-      // 动态导入避免 cycle；失败静默
+      // 动态导入避免 cycle；失败仅留痕
       void import('@tauri-apps/api/core')
-        .then(({ invoke }) => invoke('save_window_state', { width: g.width, height: g.height }).catch(() => {}))
-        .catch(() => {})
-    } catch {
-      /* ignore */
+        .then(({ invoke }) => invoke('save_window_state', { width: g.width, height: g.height }).catch((e: unknown) => {
+          logger.warn('usePersist', 'save_window_state 调用失败（best effort）：', e)
+        }))
+        .catch((e: unknown) => { logger.warn('usePersist', 'Tauri core 动态导入失败（best effort）：', e) })
+    } catch (e) {
+      logger.warn('usePersist', '持久化窗口几何失败：', e)
     }
   }
   window.addEventListener('beforeunload', save)

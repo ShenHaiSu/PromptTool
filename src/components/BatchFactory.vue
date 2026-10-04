@@ -1,12 +1,11 @@
 <script setup lang="ts">
 import { ref, computed, watch, nextTick, onMounted, onBeforeUnmount } from 'vue'
-import { Button } from '@/components/ui/button'
 import BatchCard from '@/components/BatchCard.vue'
 import { useBatchStore } from '@/stores/batch'
 import { useAssemblyStore } from '@/stores/assembly'
 import { useLibraryStore } from '@/stores/library'
 import { useImageQueueStore } from '@/stores/imageQueue'
-import { useToast } from '@/composables/useToast'
+import { notify } from '@/lib/notify'
 import { exportBatchCsv } from '@/lib/export'
 import { useVirtualizer } from '@tanstack/vue-virtual'
 import { on, off, LIBRARY_CHANGED } from '@/lib/libraryEvents'
@@ -17,7 +16,6 @@ const batch = useBatchStore()
 const assembly = useAssemblyStore()
 const library = useLibraryStore()
 const iq = useImageQueueStore()
-const { push } = useToast()
 
 // 控制行状态
 const count = ref<number>(20)
@@ -80,11 +78,11 @@ async function onRandom(): Promise<void> {
       cfg,
       allowNsfw.value,
     )
-    push(`已生成 ${batch.results.length} 条（可控）`, 'success', 1600)
+    notify(`已生成 ${batch.results.length} 条（可控）`, 'success', 1600)
   } else {
     const lockedIds = new Set(assembly.selectedItems.filter((it) => it.locked).map((it) => it.module.id))
     batch.generate(dims, grouped, lockedIds, count.value, cfg, allowNsfw.value)
-    push(`已生成 ${batch.results.length} 条`, 'success', 1600)
+    notify(`已生成 ${batch.results.length} 条`, 'success', 1600)
   }
   // 记录本次随机模式，供生图队列开始前备料 / 饥饿补货沿用
   iq.lastRandomMode = { usePartial: usePartial.value, allowNsfw: allowNsfw.value }
@@ -93,30 +91,30 @@ async function onRandom(): Promise<void> {
 
 function onClear(): void {
   batch.clear()
-  push('已清空批量结果', 'info', 1200)
+  notify('已清空批量结果', 'info', 1200)
 }
 
 async function onCopyAll(): Promise<void> {
   if (!batch.results.length) {
-    push('暂无可复制内容', 'warning')
+    notify('暂无可复制内容', 'warning')
     return
   }
   const text = batch.results.map((r) => r.finalPrompt).join('\n')
   try {
     await navigator.clipboard.writeText(text)
-    push(`已复制 ${batch.results.length} 条`, 'success', 1500)
+    notify(`已复制 ${batch.results.length} 条`, 'success', 1500)
   } catch {
-    push('复制失败', 'error')
+    notify('复制失败', 'error')
   }
 }
 
 function onExportCsv(): void {
   if (!batch.results.length) {
-    push('暂无可导出内容', 'warning')
+    notify('暂无可导出内容', 'warning')
     return
   }
   exportBatchCsv(batch.results as unknown as Array<{ finalPrompt: string; warnings: string[]; ir: import('@/engine/models').PromptIR }>)
-  push('已导出 CSV', 'success', 1500)
+  notify('已导出 CSV', 'success', 1500)
 }
 
 // 虚拟化：TanStack Virtual，容器 h-[400px]，estimateSize 110px，overscan 5
@@ -169,14 +167,13 @@ defineExpose({ refresh: refreshDims })
             @input="onCountInput"
           />
         </label>
-        <Button
+        <el-button
           data-testid="batch-random-btn"
-          size="sm"
-          class="h-7 text-xs"
+          type="primary"
+          size="small"
           :disabled="loadingDims && library.dimensions.length === 0"
           @click="onRandom"
-          >{{ usePartial ? '可控随机' : '随机生成' }}</Button
-        >
+        >{{ usePartial ? '可控随机' : '随机生成' }}</el-button>
         <label class="flex items-center gap-1 text-xs" title="包含 NSFW 条目">
           <input data-testid="batch-nsfw-switch" type="checkbox" class="h-3.5 w-3.5 accent-primary" :checked="allowNsfw" @change="allowNsfw = !allowNsfw" />
           <span>含NSFW</span>
@@ -190,13 +187,9 @@ defineExpose({ refresh: refreshDims })
           <span class="text-muted-foreground" title="以当前画布为锚点做部分随机">ⓘ</span>
         </label>
         <div class="ml-auto flex items-center gap-1">
-          <Button data-testid="batch-copy-all" variant="outline" size="sm" class="h-7 text-xs" :disabled="!batch.results.length" @click="onCopyAll"
-            >复制全部</Button
-          >
-          <Button data-testid="batch-clear" variant="ghost" size="sm" class="h-7 text-xs" :disabled="!batch.results.length" @click="onClear">清空</Button>
-          <Button data-testid="batch-export-csv" variant="outline" size="sm" class="h-7 text-xs" :disabled="!batch.results.length" @click="onExportCsv"
-            >导出CSV</Button
-          >
+          <el-button data-testid="batch-copy-all" plain size="small" :disabled="!batch.results.length" @click="onCopyAll">复制全部</el-button>
+          <el-button data-testid="batch-clear" text size="small" :disabled="!batch.results.length" @click="onClear">清空</el-button>
+          <el-button data-testid="batch-export-csv" plain size="small" :disabled="!batch.results.length" @click="onExportCsv">导出CSV</el-button>
         </div>
       </div>
       <div v-if="library.dirty && library.total > 200" class="text-[11px] text-muted-foreground">词库已变更，10 秒内自动同步 · 随机按钮不受影响</div>

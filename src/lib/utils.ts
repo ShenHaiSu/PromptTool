@@ -1,9 +1,5 @@
-import { clsx, type ClassValue } from "clsx"
-import { twMerge } from "tailwind-merge"
-
-export function cn(...inputs: ClassValue[]): string {
-  return twMerge(clsx(inputs))
-}
+// need03 清理：cn()（clsx + tailwind-merge）随 ui/* 手写组件一并下线，
+// EP 接管 class 合并后已无调用方，依赖 clsx / tailwind-merge 亦已卸载。
 
 export function ellipsis(text: string, maxLen: number): string {
   if (text.length <= maxLen) return text

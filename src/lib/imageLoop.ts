@@ -4,13 +4,14 @@
  * 归属此处而不进 store，保持 store 瘦；store 只负责入队/启停/事件。
  */
 import { randomAssembly, partialRandomAssembly } from '@/engine/random'
+import { logger } from '@/lib/logger'
 import { adaptToModel } from '@/engine/adapters'
 import { useAssemblyStore } from '@/stores/assembly'
 import { useBatchStore } from '@/stores/batch'
 import { useImageQueueStore } from '@/stores/imageQueue'
 import { useLibraryStore } from '@/stores/library'
 import { useRandomHistoryStore } from '@/stores/randomHistory'
-import { useToast } from '@/composables/useToast'
+import { notify } from '@/lib/notify'
 
 export type EngineFns = {
   randomAssembly: typeof randomAssembly
@@ -103,14 +104,17 @@ export async function drawOnePrompt(
         historyStore.state,
       )
     }
-  } catch {
+  } catch (e) {
+    logger.warn('imageLoop', '恢复历史 IR 失败（按无历史处理）：', e)
     return null
   }
   const ir = irs[0]
   if (!ir) return null
   try {
     historyStore.persist()
-  } catch { /* ignore */ }
+  } catch (e) {
+    logger.warn('imageLoop', '持久化历史失败：', e)
+  }
   const prompt = adaptToModel(ir, assembly.config.modelProfile, assembly.config)
   return { prompt, irHash: ir.hash() }
 }
@@ -137,7 +141,8 @@ export function isPartialFallback(usePartial: boolean): boolean {
   if (!usePartial) return false
   try {
     return useAssemblyStore().selectedItems.length === 0
-  } catch {
+  } catch (e) {
+    logger.warn('imageLoop', 'isPartialFallback 读取画布失败（按 false 处理）：', e)
     return false
   }
 }
@@ -159,7 +164,9 @@ export async function ensureLibraryReady(): Promise<boolean> {
   if (library.dimensions.length === 0) {
     try {
       await library.fetchAll()
-    } catch { /* ignore，下方判空 */ }
+    } catch (e) {
+      logger.warn('imageLoop', '预热词库失败（下方判空）：', e)
+    }
   }
   return library.dimensions.length > 0 && library.total > 0
 }
@@ -183,7 +190,7 @@ export async function prepareStartQueue(opts?: {
   push?: (msg: string, type?: 'info' | 'success' | 'warning' | 'error', ms?: number) => void
   confirm?: (msg: string) => boolean
 }): Promise<StartPrepareResult> {
-  const push = opts?.push ?? useToast().push
+  const push = opts?.push ?? notify
   const confirm = opts?.confirm ?? ((msg: string) => window.confirm(msg))
   try {
     const iq = useImageQueueStore()
@@ -195,7 +202,8 @@ export async function prepareStartQueue(opts?: {
         push('未设置生图密钥，无法开始（请去右上「模型配置」设置）', 'warning')
         return { kind: 'blocked', reason: 'no-key' }
       }
-    } catch {
+    } catch (e) {
+      logger.warn('imageLoop', '读取生图连接就绪态失败（下方按配置判定）：', e)
       if (iq.config.apiKeyState === 'unset' && !iq.config.apiKey) {
         push('未设置生图密钥，无法开始', 'warning')
         return { kind: 'blocked', reason: 'no-key' }
@@ -273,7 +281,7 @@ async function drawStartItems(
    },
  ): Promise<LoopEnqueueOutcome> {
    const engine: EngineFns = opts?.engine ?? { randomAssembly, partialRandomAssembly }
-   const push = opts?.push ?? useToast().push
+   const push = opts?.push ?? notify
    const iq = useImageQueueStore()
    const empty: LoopEnqueueOutcome = { enqueued: 0, skipped: 0 }
    if (refillCancelled) return empty

@@ -1,7 +1,5 @@
 <script setup lang="ts">
 import { ref, computed } from 'vue'
-import { Button } from '@/components/ui/button'
-import { Input } from '@/components/ui/input'
 import { RULE_TYPES } from '@/engine/ruleTypes'
 import type { Rule, RuleType } from '@/engine/ruleTypes'
 import type { RuleUpsertPayload } from '@/lib/db'
@@ -107,83 +105,71 @@ function onKeydown(e: KeyboardEvent): void {
 <template>
   <div v-if="open" data-testid="rule-dialog" class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" @click.self="onClose" @keydown="onKeydown">
     {{ ensureInit() }}
-    <div class="flex max-h-[min(80vh,680px)] w-[min(520px,92vw)] flex-col rounded-md border bg-background p-4 shadow-xl" @click.stop>
-      <div class="flex items-center justify-between">
-        <h3 class="text-sm font-semibold">{{ mode === 'create' ? '新建规则' : '编辑规则' }}</h3>
-        <Button variant="ghost" size="sm" class="h-7 w-7 p-0" title="关闭" aria-label="关闭" @click="onClose">✕</Button>
-      </div>
-
-      <div class="mt-3 flex flex-col gap-3 overflow-auto">
-        <label class="flex flex-col gap-1 text-xs">
-          <span>名称 *（≤50 字）</span>
-          <Input v-model="name" data-testid="rule-name" class="h-7 text-xs" placeholder="如：套装互斥·上装" />
-        </label>
-
-        <label class="flex flex-col gap-1 text-xs">
-          <span>类型 *</span>
-          <select v-model="type" data-testid="rule-type" class="h-7 rounded-md border bg-background px-2 text-xs">
-            <option v-for="t in RULE_TYPES" :key="t" :value="t">{{ t }}</option>
-          </select>
+    <el-dialog
+      :model-value="open"
+      :title="mode === 'create' ? '新建规则' : '编辑规则'"
+      width="520px"
+      destroy-on-close
+      :append-to-body="false"
+      @close="onClose"
+      @click.stop
+    >
+      <el-button text size="small" title="关闭" aria-label="关闭" @click="onClose">✕</el-button>
+      <el-form label-width="96px" @submit.prevent>
+        <el-form-item label="名称" required>
+          <el-input v-model="name" data-testid="rule-name" placeholder="如：套装互斥·上装" />
+        </el-form-item>
+        <el-form-item label="类型" required>
+          <el-select v-model="type" data-testid="rule-type" class="w-full">
+            <el-option v-for="t in RULE_TYPES" :key="t" :value="t" :label="t" />
+          </el-select>
           <span class="text-[11px] text-muted-foreground">{{ TYPE_HINT[type] }}</span>
-        </label>
-
+        </el-form-item>
         <div class="grid grid-cols-2 gap-2">
-          <label class="flex flex-col gap-1 text-xs">
-            <span>源维度</span>
-            <select v-model="sourceDim" data-testid="rule-source-dim" class="h-7 rounded-md border bg-background px-2 text-xs">
-              <option value="">（不限）</option>
-              <option v-for="d in dimensions" :key="d.id" :value="d.id">{{ d.nameCn }}（{{ d.key }}）</option>
-            </select>
-          </label>
-          <label class="flex flex-col gap-1 text-xs">
-            <span>源条目（空=该维度全部）</span>
-            <select v-model="sourceModule" data-testid="rule-source-module" class="h-7 rounded-md border bg-background px-2 text-xs">
-              <option value="">（全部）</option>
-              <option v-for="m in sourceModules" :key="m.id" :value="m.id">{{ m.displayName }}</option>
-            </select>
-          </label>
+          <el-form-item label="源维度">
+            <el-select v-model="sourceDim" data-testid="rule-source-dim" class="w-full">
+              <el-option value="" label="（不限）" />
+              <el-option v-for="d in dimensions" :key="d.id" :value="d.id" :label="`${d.nameCn}（${d.key}）`" />
+            </el-select>
+          </el-form-item>
+          <el-form-item label="源条目">
+            <el-select v-model="sourceModule" data-testid="rule-source-module" class="w-full">
+              <el-option value="" label="（全部）" />
+              <el-option v-for="m in sourceModules" :key="m.id" :value="m.id" :label="m.displayName" />
+            </el-select>
+          </el-form-item>
         </div>
-
         <template v-if="showTargets">
           <div class="grid grid-cols-2 gap-2">
-            <label class="flex flex-col gap-1 text-xs">
-              <span>目标维度</span>
-              <select v-model="targetDim" data-testid="rule-target-dim" class="h-7 rounded-md border bg-background px-2 text-xs">
-                <option value="">（不限）</option>
-                <option v-for="d in dimensions" :key="d.id" :value="d.id">{{ d.nameCn }}（{{ d.key }}）</option>
-              </select>
-            </label>
-            <label class="flex flex-col gap-1 text-xs">
-              <span>目标条目（空=该维度全部）</span>
-              <select v-model="targetModule" data-testid="rule-target-module" class="h-7 rounded-md border bg-background px-2 text-xs">
-                <option value="">（全部）</option>
-                <option v-for="m in targetModules" :key="m.id" :value="m.id">{{ m.displayName }}</option>
-              </select>
-            </label>
+            <el-form-item label="目标维度">
+              <el-select v-model="targetDim" data-testid="rule-target-dim" class="w-full">
+                <el-option value="" label="（不限）" />
+                <el-option v-for="d in dimensions" :key="d.id" :value="d.id" :label="`${d.nameCn}（${d.key}）`" />
+              </el-select>
+            </el-form-item>
+            <el-form-item label="目标条目">
+              <el-select v-model="targetModule" data-testid="rule-target-module" class="w-full">
+                <el-option value="" label="（全部）" />
+                <el-option v-for="m in targetModules" :key="m.id" :value="m.id" :label="m.displayName" />
+              </el-select>
+            </el-form-item>
           </div>
         </template>
-        <label v-else class="flex flex-col gap-1 text-xs">
-          <span>上限数量（1-10，同维度段数上限）</span>
-          <input v-model.number="limitCount" data-testid="rule-limit-count" type="number" min="1" max="10" class="h-7 rounded-md border bg-background px-2 text-xs" />
-        </label>
-
-        <label class="flex flex-col gap-1 text-xs">
-          <span>提示消息 *（支持 {source}{target} 占位，如：已选{source}，{target}将自动忽略）</span>
-          <Input v-model="message" data-testid="rule-message" class="h-7 text-xs" placeholder="已选{source}，{target}将自动忽略" />
-        </label>
-
-        <label class="flex items-center gap-2 text-xs">
-          <input v-model="isEnabled" data-testid="rule-enabled" type="checkbox" class="accent-primary" />
-          <span>启用</span>
-        </label>
-
+        <el-form-item v-else label="上限数量">
+          <el-input-number v-model="limitCount" data-testid="rule-limit-count" :min="1" :max="10" size="small" />
+        </el-form-item>
+        <el-form-item label="提示消息" required>
+          <el-input v-model="message" data-testid="rule-message" placeholder="已选{source}，{target}将自动忽略" />
+        </el-form-item>
+        <el-form-item label="启用">
+          <el-switch v-model="isEnabled" data-testid="rule-enabled" />
+        </el-form-item>
         <p v-if="error" class="text-xs text-red-600 dark:text-red-400">{{ error }}</p>
-      </div>
-
-      <div class="mt-3 flex justify-end gap-2">
-        <Button variant="outline" size="sm" class="h-7 text-xs" @click="onClose">取消</Button>
-        <Button data-testid="rule-save" size="sm" class="h-7 text-xs" @click="onSave">保存（Ctrl+Enter）</Button>
-      </div>
-    </div>
+      </el-form>
+      <template #footer>
+        <el-button text size="small" @click="onClose">取消</el-button>
+        <el-button data-testid="rule-save" type="primary" size="small" @click="onSave">保存（Ctrl+Enter）</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>

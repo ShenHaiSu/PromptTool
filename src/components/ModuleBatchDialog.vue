@@ -1,8 +1,6 @@
 <script setup lang="ts">
 import { ref, computed, watch } from 'vue'
-import { Button } from '@/components/ui/button'
-import { Card } from '@/components/ui/card'
-import { useToast } from '@/composables/useToast'
+import { notify } from '@/lib/notify'
 import { dbBatchCreateModules } from '@/lib/db'
 import { parseBatchText } from '@/lib/moduleBatch'
 import type { ParsedBatch } from '@/lib/moduleBatch'
@@ -17,7 +15,6 @@ const emit = defineEmits<{
   (e: 'imported'): void
 }>()
 
-const { push } = useToast()
 
 const rawText = ref('')
 const mode = ref<'skip' | 'overwrite'>('skip')
@@ -69,16 +66,16 @@ function onClear(): void {
 
 async function onValidate(): Promise<void> {
   const p = parsed.value
-  push(`校验完成：有效 ${p.stats.valid} · 空行 ${p.stats.empty} · 重复 ${p.stats.duplicateInBatch} · 超长 ${p.stats.tooLong}`, 'info', 2000)
+  notify(`校验完成：有效 ${p.stats.valid} · 空行 ${p.stats.empty} · 重复 ${p.stats.duplicateInBatch} · 超长 ${p.stats.tooLong}`, 'info', 2000)
 }
 
 async function onCreate(): Promise<void> {
   if (!props.dimension) {
-    push('维度不存在', 'error')
+    notify('维度不存在', 'error')
     return
   }
   if (validCount.value === 0) {
-    push('请先粘贴至少一行有效内容', 'warning')
+    notify('请先粘贴至少一行有效内容', 'warning')
     return
   }
   const items = parsed.value.lines
@@ -107,7 +104,7 @@ async function onCreate(): Promise<void> {
       errors: r.errors,
       warnings: r.warnings,
     }
-    push(`已创建 ${r.modulesCreated} · 更新 ${r.modulesUpdated} · 跳过 ${r.modulesSkipped}`, 'success', 2500)
+    notify(`已创建 ${r.modulesCreated} · 更新 ${r.modulesUpdated} · 跳过 ${r.modulesSkipped}`, 'success', 2500)
     emit('imported')
     // auto-close after 1.5s on full success
     if (r.errors.length === 0) {
@@ -116,7 +113,7 @@ async function onCreate(): Promise<void> {
       }, 1500)
     }
   } catch (e) {
-    push(`创建失败: ${String(e)}`, 'error')
+    notify(`创建失败: ${String(e)}`, 'error')
   } finally {
     importing.value = false
   }
@@ -138,12 +135,12 @@ async function onCreate(): Promise<void> {
         <h2 class="text-sm font-semibold">
           批量新增 — {{ dimension ? `${dimension.nameCn} / ${dimension.key}` : '—' }}
         </h2>
-        <Button data-testid="module-batch-close" variant="ghost" size="sm" @click="onClose">✕</Button>
+        <el-button data-testid="module-batch-close" text size="small" @click="onClose">✕</el-button>
       </div>
 
       <div class="min-h-0 flex-1 overflow-y-auto p-4">
         <!-- 配置区 -->
-        <Card class="p-3">
+        <el-card shadow="never">
           <div class="space-y-3 text-xs">
             <div class="flex flex-wrap items-center gap-3">
               <span class="font-medium">去重策略：</span>
@@ -157,7 +154,7 @@ async function onCreate(): Promise<void> {
               <label class="flex items-center gap-1"><input data-testid="module-batch-nsfw" type="checkbox" v-model="isNsfw" class="h-3.5 w-3.5 rounded border-input" /> NSFW</label>
             </div>
           </div>
-        </Card>
+        </el-card>
 
         <!-- 粘贴区 -->
         <div class="mt-3 space-y-2">
@@ -170,7 +167,7 @@ async function onCreate(): Promise<void> {
             @input="rawText = ($event.target as HTMLTextAreaElement).value"
           />
           <div class="flex flex-wrap items-center gap-2 text-xs">
-            <Button variant="ghost" size="sm" class="h-7 text-xs" @click="onClear">清空</Button>
+            <el-button text size="small" @click="onClear">清空</el-button>
             <span data-testid="module-batch-stats" class="text-muted-foreground">
               已粘贴 {{ parsed.stats.valid }} 行 · 空行 {{ parsed.stats.empty }} · 重复行 {{ parsed.stats.duplicateInBatch }} · 超长 {{ parsed.stats.tooLong }}
             </span>
@@ -207,9 +204,9 @@ async function onCreate(): Promise<void> {
                 >{{ l.status === 'ok' ? '有效' : l.status === 'too_long' ? '超长截断' : l.status === 'duplicate_in_batch' ? '批次内重复' : '空行忽略' }}</span>
               </div>
               <div v-if="filteredLines.length > pageSize" class="flex items-center justify-center gap-2 p-2 text-xs">
-                <Button variant="outline" size="sm" class="h-7" :disabled="curPage <= 1" @click="curPage--">‹</Button>
+                <el-button plain size="small" :disabled="curPage <= 1" @click="curPage--">‹</el-button>
                 <span>{{ curPage }} / {{ totalPages }}</span>
-                <Button variant="outline" size="sm" class="h-7" :disabled="curPage >= totalPages" @click="curPage++">›</Button>
+                <el-button plain size="small" :disabled="curPage >= totalPages" @click="curPage++">›</el-button>
               </div>
             </template>
           </div>
@@ -225,11 +222,9 @@ async function onCreate(): Promise<void> {
       </div>
 
       <div class="flex justify-end gap-2 border-t px-4 py-3">
-        <Button data-testid="module-batch-cancel" variant="ghost" size="sm" @click="onClose">取消</Button>
-        <Button data-testid="module-batch-validate" variant="outline" size="sm" @click="onValidate">仅校验</Button>
-        <Button data-testid="module-batch-create" size="sm" :disabled="!canCreate" @click="onCreate">
-          {{ importing ? '创建中…' : `创建 ${validCount} 条` }}
-        </Button>
+        <el-button data-testid="module-batch-cancel" text size="small" @click="onClose">取消</el-button>
+        <el-button data-testid="module-batch-validate" plain size="small" @click="onValidate">仅校验</el-button>
+        <el-button data-testid="module-batch-create" type="primary" size="small" :disabled="!canCreate" @click="onCreate">{{ importing ? '创建中…' : `创建 ${validCount} 条` }}</el-button>
       </div>
     </div>
   </div>

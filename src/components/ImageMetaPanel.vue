@@ -1,16 +1,14 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
-import { Button } from '@/components/ui/button'
-import { Card } from '@/components/ui/card'
 import { useImageMeta } from '@/composables/useImageMeta'
-import { useToast } from '@/composables/useToast'
+import { notify } from '@/lib/notify'
 import { useImageQueueStore } from '@/stores/imageQueue'
 import { dbRevealInExplorer } from '@/lib/db'
 import { IQ_RATIOS, IQ_SIZES } from '@/lib/imageQueue'
 import { groupMeta, buildCopyText } from '@/lib/imageMeta'
+import { logger } from '@/lib/logger'
 
 const im = useImageMeta()
-const { push } = useToast()
 
 const grouped = computed(() => groupMeta(im.meta.value))
 
@@ -29,11 +27,11 @@ async function onPickClick(): Promise<void> {
       return
     }
     // 用户取消（null）不提示；其余报错提示
-    if (!/cancel/i.test(msg)) push(`选择文件失败：${msg}`, 'error')
+    if (!/cancel/i.test(msg)) notify(`选择文件失败：${msg}`, 'error')
     // dialog open 在取消时直接 return（无抛），此处仅兜底
     try {
       fileInput.value?.click()
-    } catch { /* ignore */ }
+    } catch (err2) { logger.warn('ImageMeta', 'fileInput降级失败', err2) }
   }
 }
 
@@ -85,13 +83,13 @@ onMounted(async () => {
         }
       })
     }
-  } catch { /* 非 Tauri / 旧版本：仅 HTML5 链路 */ }
+  } catch (err) { logger.warn('ImageMeta', '非Tauri环境，仅HTML5链路', err) }
 })
 
 onBeforeUnmount(() => {
   try {
     unlistenTauriDrop?.()
-  } catch { /* ignore */ }
+  } catch (err) { logger.warn('ImageMeta', 'unlisten失败', err) }
   unlistenTauriDrop = null
 })
 
@@ -99,7 +97,8 @@ async function copyText(text: string, okMsg: string): Promise<void> {
   if (!text.trim()) return
   try {
     await navigator.clipboard.writeText(text)
-  } catch {
+  } catch (err) {
+    logger.warn('ImageMeta', 'clipboard降级', err)
     const ta = document.createElement('textarea')
     ta.value = text
     ta.style.position = 'fixed'
@@ -109,7 +108,7 @@ async function copyText(text: string, okMsg: string): Promise<void> {
     document.execCommand('copy')
     document.body.removeChild(ta)
   }
-  push(okMsg, 'success', 1200)
+  notify(okMsg, 'success', 1200)
 }
 
 function onCopyPrompt(): void {
@@ -123,7 +122,7 @@ async function onReuse(): Promise<void> {
   if (!m || reusing.value) return
   const prompt = (m.prompt ?? '').trim()
   if (!prompt) {
-    push('内嵌 prompt 为空，无法复用', 'warning')
+    notify('内嵌 prompt 为空，无法复用', 'warning')
     return
   }
   const iq = useImageQueueStore()
@@ -132,12 +131,12 @@ async function onReuse(): Promise<void> {
   if ((IQ_SIZES as readonly string[]).includes(m.size)) size = m.size
   if ((IQ_RATIOS as readonly string[]).includes(m.ratio)) ratio = m.ratio
   if (size !== m.size || ratio !== m.ratio) {
-    push('内嵌 size/ratio 已失效，已用当前配置入队', 'warning')
+    notify('内嵌 size/ratio 已失效，已用当前配置入队', 'warning')
   }
   reusing.value = true
   try {
     const { enqueued } = await iq.enqueueBatch([{ prompt, irHash: m.irHash ?? null, size, ratio }])
-    if (enqueued > 0) push(`已复用参数入队（${size} ${ratio}），可开始生图`, 'success', 2000)
+    if (enqueued > 0) notify(`已复用参数入队（${size} ${ratio}），可开始生图`, 'success', 2000)
   } finally {
     reusing.value = false
   }
@@ -155,8 +154,9 @@ async function onReveal(): Promise<void> {
         ?? (mod as { open?: (x: string) => Promise<void> }).open
       if (typeof fn === 'function') await (fn as (x: string) => Promise<void>)(p)
       else throw new Error('opener unavailable')
-    } catch {
-      push(`定位失败：${err instanceof Error ? err.message : String(err)}`, 'error')
+    } catch (err2) {
+      logger.warn('ImageMeta', '定位失败', err2)
+      notify(`定位失败：${err instanceof Error ? err.message : String(err)}`, 'error')
     }
   }
 }
@@ -197,7 +197,7 @@ async function onReveal(): Promise<void> {
       <div class="text-3xl">🖼️</div>
       <div class="text-sm font-medium">尚未选择图片</div>
       <div class="text-xs text-muted-foreground">点上方虚线框选择，或从文件管理器拖一张本机生成的图进来</div>
-      <Button size="sm" variant="outline" class="h-7 text-xs" @click="onPickClick">选择图片</Button>
+      <el-button plain size="small" @click="onPickClick">选择图片</el-button>
     </div>
 
     <div v-else-if="im.status.value === 'reading'" class="mt-4 rounded-lg border p-6 text-center text-xs text-muted-foreground">
@@ -210,9 +210,9 @@ async function onReveal(): Promise<void> {
         {{ im.webNotice.value || '该图无内嵌生图参数（外部图或未嵌入）' }}
       </div>
       <div class="flex flex-wrap gap-2">
-        <Button size="sm" variant="outline" class="h-7 text-xs" @click="onPickClick">重新选择</Button>
-        <Button size="sm" variant="ghost" class="h-7 text-xs" data-testid="meta-reset" @click="im.reset()">清空</Button>
-        <Button v-if="im.filePath.value" size="sm" variant="outline" class="h-7 text-xs" data-testid="meta-reveal" @click="onReveal">在文件管理器中定位</Button>
+        <el-button plain size="small" @click="onPickClick">重新选择</el-button>
+        <el-button text size="small" data-testid="meta-reset" @click="im.reset()">清空</el-button>
+        <el-button v-if="im.filePath.value" plain size="small" data-testid="meta-reveal" @click="onReveal">在文件管理器中定位</el-button>
       </div>
     </div>
 
@@ -221,14 +221,14 @@ async function onReveal(): Promise<void> {
       <div class="text-sm font-medium text-red-700 dark:text-red-300">解析失败</div>
       <div class="mt-1 break-all text-xs text-red-600 dark:text-red-400">{{ im.errorMsg.value || '未知错误' }}</div>
       <div class="mt-3 flex gap-2">
-        <Button size="sm" variant="outline" class="h-7 text-xs" data-testid="meta-retry" @click="im.filePath.value ? im.read(im.filePath.value) : onPickClick()">重试</Button>
-        <Button size="sm" variant="ghost" class="h-7 text-xs" data-testid="meta-reset" @click="im.reset()">清空</Button>
+        <el-button plain size="small" data-testid="meta-retry" @click="im.filePath.value ? im.read(im.filePath.value) : onPickClick()">重试</el-button>
+        <el-button text size="small" data-testid="meta-reset" @click="im.reset()">清空</el-button>
       </div>
     </div>
 
     <!-- 成功态：元数据卡片 -->
     <div v-else-if="im.status.value === 'done' && im.meta.value" class="mt-3 flex max-w-2xl flex-col gap-2">
-      <Card class="p-3">
+      <el-card shadow="never" class="p-3">
         <div class="flex items-center gap-2">
           <span data-testid="meta-model" class="rounded bg-primary/10 px-2 py-0.5 text-xs font-semibold text-primary">{{ grouped.model }}</span>
           <span class="text-xs text-muted-foreground">{{ grouped.size }} · {{ grouped.ratio }}</span>
@@ -265,21 +265,21 @@ async function onReveal(): Promise<void> {
           </div>
         </dl>
         <div class="mt-2 flex flex-wrap gap-2">
-          <Button size="sm" variant="outline" class="h-7 text-xs" data-testid="meta-reveal" @click="onReveal">定位文件</Button>
-          <Button size="sm" variant="ghost" class="h-7 text-xs" data-testid="meta-reset" @click="im.reset()">清空</Button>
+          <el-button plain size="small" data-testid="meta-reveal" @click="onReveal">定位文件</el-button>
+          <el-button text size="small" data-testid="meta-reset" @click="im.reset()">清空</el-button>
         </div>
-      </Card>
-      <Card class="p-3">
+      </el-card>
+      <el-card shadow="never" class="p-3">
         <div class="flex items-center gap-2">
           <h5 class="text-xs font-semibold">提示词</h5>
           <span class="text-[11px] text-muted-foreground">{{ grouped.promptLength }} 字</span>
           <div class="ml-auto flex gap-1">
-            <Button size="sm" variant="outline" class="h-6 text-[11px]" data-testid="meta-copy-prompt" :disabled="!grouped.hasPrompt" @click="onCopyPrompt">复制prompt</Button>
-            <Button size="sm" class="h-6 text-[11px]" data-testid="meta-reuse" :disabled="!grouped.hasPrompt || reusing" @click="onReuse">{{ reusing ? '入队中…' : '复用参数下单' }}</Button>
+            <el-button plain size="small" data-testid="meta-copy-prompt" :disabled="!grouped.hasPrompt" @click="onCopyPrompt">复制prompt</el-button>
+            <el-button type="primary" size="small" data-testid="meta-reuse" :disabled="!grouped.hasPrompt || reusing" @click="onReuse">{{ reusing ? '入队中…' : '复用参数下单' }}</el-button>
           </div>
         </div>
         <p data-testid="meta-prompt" class="mt-2 max-h-64 overflow-auto whitespace-pre-wrap break-words rounded border p-2 font-mono text-xs">{{ im.meta.value?.prompt }}</p>
-      </Card>
+      </el-card>
     </div>
   </section>
 </template>

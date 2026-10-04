@@ -1,19 +1,19 @@
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
-import { Button } from '@/components/ui/button'
-import { Input } from '@/components/ui/input'
-import { Card, CardHeader, CardTitle, CardContent } from '@/components/ui/card'
+import { ref, computed, onMounted } from 'vue'
+import { logger } from '@/lib/logger'
 import { useDbRegistryStore } from '@/stores/dbRegistry'
 import type { RegistryRow } from '@/stores/dbRegistry'
 import { displayPath } from '@/lib/pathDisplay'
-import { useToast } from '@/composables/useToast'
+import { notify } from '@/lib/notify'
 
-defineProps<{ open: boolean }>()
+const props = defineProps<{ open: boolean }>()
 const emit = defineEmits<{ (e: 'update:open', v: boolean): void }>()
+const openProxy = computed({
+  get: () => props.open,
+  set: (v: boolean) => emit('update:open', v),
+})
 
 const store = useDbRegistryStore()
-const { push } = useToast()
-
 const showCreate = ref(false)
 const createPath = ref('PromptDataBase.db')
 const createAlias = ref('')
@@ -29,11 +29,11 @@ onMounted(async () => {
     await store.fetchList()
     await store.fetchActiveInfo()
     if (store.activeInfo) maxActiveSelect.value = store.activeInfo.maxActive
-  } catch {}
+  } catch (err) { logger.warn('DbManager', 'fetchList降级', err) }
 })
 
 async function handleSwitch(path: string): Promise<void> {
-  try { await store.switchActive(path) } catch (e) { push(String(e), 'error') }
+  try { await store.switchActive(path) } catch (e) { notify(String(e), 'error') }
 }
 
 async function handleRemove(row: RegistryRow): Promise<void> {
@@ -42,20 +42,20 @@ async function handleRemove(row: RegistryRow): Promise<void> {
     ? `该库文件已不存在，确定移除注册「${row.alias}」？`
     : `确定删除「${row.alias}」？\n路径：${displayPath(row.path)}\n此操作将永久删除数据库文件及伴生文件，且不可恢复。`
   if (!confirm(msg)) return
-  try { await store.removeRegistry(row.path) } catch (e) { push(String(e), 'error') }
+  try { await store.removeRegistry(row.path) } catch (e) { notify(String(e), 'error') }
 }
 
 async function handleRepair(row: RegistryRow): Promise<void> {
   const raw: string | null = window.prompt('请输入新 .db 绝对路径', '')
   const newPath: string | null = raw?.trim() ? raw.trim() : null
-  if (!newPath) { push('路径不能为空，请输入具体 .db 绝对路径', 'warning'); return }
-  if (newPath.startsWith('<')) { push('路径不可为占位符，请输入具体 .db 绝对路径', 'warning'); return }
-  try { await store.repairPath(row.path, newPath); push('已补新路径', 'success') } catch (e) { push(String(e), 'error') }
+  if (!newPath) { notify('路径不能为空，请输入具体 .db 绝对路径', 'warning'); return }
+  if (newPath.startsWith('<')) { notify('路径不可为占位符，请输入具体 .db 绝对路径', 'warning'); return }
+  try { await store.repairPath(row.path, newPath); notify('已补新路径', 'success') } catch (e) { notify(String(e), 'error') }
 }
 
 async function handleRebuild(row: RegistryRow): Promise<void> {
   const withSeed = confirm('重建时是否插入样板？\n确定=带样板，取消=空白库')
-  try { await store.rebuildMissing(row.path, withSeed); push('已重建', 'success') } catch (e) { push(String(e), 'error') }
+  try { await store.rebuildMissing(row.path, withSeed); notify('已重建', 'success') } catch (e) { notify(String(e), 'error') }
 }
 
 function startEdit(row: RegistryRow): void {
@@ -69,30 +69,30 @@ async function confirmEdit(row: RegistryRow): Promise<void> {
   try {
     await store.updateMeta(row.path, editAlias.value.trim() || undefined, editRemark.value)
     editingId.value = null
-    push('已更新', 'success')
-  } catch (e) { push(String(e), 'error') }
+    notify('已更新', 'success')
+  } catch (e) { notify(String(e), 'error') }
 }
 
 async function handleSetMaxActive(): Promise<void> {
-  try { await store.setMaxActive(maxActiveSelect.value); push(`已设为 ${maxActiveSelect.value} 个分区同时活跃`, 'success') } catch (e) { push(String(e), 'error') }
+  try { await store.setMaxActive(maxActiveSelect.value); notify(`已设为 ${maxActiveSelect.value} 个分区同时活跃`, 'success') } catch (e) { notify(String(e), 'error') }
 }
 
 async function handleCreate(): Promise<void> {
-  if (!createAlias.value.trim()) { push('别名必填', 'warning'); return }
+  if (!createAlias.value.trim()) { notify('别名必填', 'warning'); return }
   try {
     await store.createBusiness({ path: createPath.value.trim(), alias: createAlias.value.trim(), remark: createRemark.value.trim() || undefined, withSeed: createWithSeed.value })
-  } catch (e) { push(String(e), 'error') }
+  } catch (e) { notify(String(e), 'error') }
 }
 </script>
 
 <template>
-  <div v-if="open" data-testid="db-manager-drawer" class="fixed inset-0 z-40 flex justify-end">
-    <div class="absolute inset-0 bg-black/20" @click="emit('update:open', false)" />
-    <div class="relative flex w-[420px] max-w-[90vw] flex-col bg-background shadow-xl">
-      <div class="flex items-center justify-between border-b px-4 py-3">
+  <el-drawer v-model="openProxy" direction="rtl" size="420px" append-to-body data-testid="db-manager-drawer" title="数据库管理">
+    <template #header>
+      <div class="flex items-center justify-between">
         <h2 class="text-sm font-semibold">数据库管理</h2>
-        <button class="rounded px-2 py-1 text-sm hover:bg-accent" data-testid="drawer-close" @click="emit('update:open', false)">×</button>
+        <el-button text size="small" data-testid="drawer-close" @click="emit('update:open', false)">×</el-button>
       </div>
+    </template>
       <div class="flex-1 overflow-auto p-4 space-y-4">
         <div v-if="store.activeInfo?.foreground" class="rounded bg-muted p-3 text-sm">
           <div class="font-medium">当前前台：{{ store.activeInfo.foreground.alias }}</div>
@@ -113,22 +113,22 @@ async function handleCreate(): Promise<void> {
             <div v-if="row.status === 'missing'" class="text-xs text-red-500">文件不存在</div>
             <div class="mt-2 flex flex-wrap gap-1">
               <template v-if="row.status === 'available'">
-                <Button size="sm" variant="outline" class="h-7 text-xs" :data-testid="`switch-${row.alias}`" @click="handleSwitch(row.path)">切换</Button>
-                <Button size="sm" variant="ghost" class="h-7 text-xs" @click="startEdit(row)">编辑</Button>
-                <Button size="sm" variant="ghost" class="h-7 text-xs text-red-600" @click="handleRemove(row)">删除</Button>
+                <el-button plain size="small" :data-testid="`switch-${row.alias}`" @click="handleSwitch(row.path)">切换</el-button>
+                <el-button text size="small" @click="startEdit(row)">编辑</el-button>
+                <el-button text size="small" type="danger" @click="handleRemove(row)">删除</el-button>
               </template>
               <template v-else>
-                <Button size="sm" variant="outline" class="h-7 text-xs" @click="handleRepair(row)">补新路径</Button>
-                <Button size="sm" variant="outline" class="h-7 text-xs" @click="handleRebuild(row)">重建空白</Button>
-                <Button size="sm" variant="ghost" class="h-7 text-xs" @click="handleRemove(row)">移除</Button>
+                <el-button plain size="small" @click="handleRepair(row)">补新路径</el-button>
+                <el-button plain size="small" @click="handleRebuild(row)">重建空白</el-button>
+                <el-button text size="small" @click="handleRemove(row)">移除</el-button>
               </template>
             </div>
             <div v-if="editingId === row.id" class="mt-2 space-y-2 rounded bg-muted p-2">
-              <Input v-model="editAlias" placeholder="别名" class="h-7 text-xs" />
-              <Input v-model="editRemark" placeholder="备注" class="h-7 text-xs" />
+              <el-input v-model="editAlias" placeholder="别名" size="small" />
+              <el-input v-model="editRemark" placeholder="备注" size="small" />
               <div class="flex gap-1">
-                <Button size="sm" class="h-7 text-xs" @click="confirmEdit(row)">保存</Button>
-                <Button size="sm" variant="ghost" class="h-7 text-xs" @click="editingId = null">取消</Button>
+                <el-button type="primary" size="small" @click="confirmEdit(row)">保存</el-button>
+                <el-button text size="small" @click="editingId = null">取消</el-button>
               </div>
             </div>
           </div>
@@ -146,20 +146,19 @@ async function handleCreate(): Promise<void> {
           <span class="text-xs text-muted-foreground">当前 {{ store.activeInfo?.maxActive ?? 2 }}</span>
         </div>
 
-        <Card>
-          <CardHeader><CardTitle class="text-sm">新建分区</CardTitle></CardHeader>
-          <CardContent class="space-y-2">
-            <Button size="sm" variant="outline" data-testid="toggle-create" @click="showCreate = !showCreate">{{ showCreate ? '收起' : '展开' }}</Button>
+        <el-card shadow="never">
+          <template #header><span class="text-sm font-semibold">新建分区</span></template>
+          <div class="space-y-2">
+            <el-button plain size="small" data-testid="toggle-create" @click="showCreate = !showCreate">{{ showCreate ? '收起' : '展开' }}</el-button>
             <div v-if="showCreate" class="space-y-2">
-              <Input v-model="createPath" placeholder="路径 .db" data-testid="create-path" />
-              <Input v-model="createAlias" placeholder="别名 *必填" data-testid="create-alias" />
-              <Input v-model="createRemark" placeholder="备注选填" data-testid="create-remark" />
+              <el-input v-model="createPath" placeholder="路径 .db" size="small" data-testid="create-path" />
+              <el-input v-model="createAlias" placeholder="别名 *必填" size="small" data-testid="create-alias" />
+              <el-input v-model="createRemark" placeholder="备注选填" size="small" data-testid="create-remark" />
               <label class="flex items-center gap-2 text-xs"><input type="checkbox" v-model="createWithSeed" data-testid="create-with-seed" /> 插入样板</label>
-              <Button size="sm" data-testid="create-confirm" @click="handleCreate">创建并切换</Button>
+              <el-button type="primary" size="small" data-testid="create-confirm" @click="handleCreate">创建并切换</el-button>
             </div>
-          </CardContent>
-        </Card>
+          </div>
+        </el-card>
       </div>
-    </div>
-  </div>
+    </el-drawer>
 </template>

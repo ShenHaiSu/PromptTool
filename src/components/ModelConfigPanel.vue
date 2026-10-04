@@ -1,15 +1,13 @@
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
-import { Button } from '@/components/ui/button'
-import { Input } from '@/components/ui/input'
-import { useToast } from '@/composables/useToast'
+import { notify } from '@/lib/notify'
+import { logger } from '@/lib/logger'
 import { useConnectionProfileStore } from '@/stores/connectionProfile'
 import { DEFAULT_MODEL, SUPPORTED_MODELS } from '@/lib/connectionProfile'
 import { IQ_DEFAULT_API_BASE, trimTrailingSlash } from '@/lib/imageQueue'
 import { modelTestConnection, type IqTestResult } from '@/lib/imageQueueApi'
 
 const conn = useConnectionProfileStore()
-const { push } = useToast()
 
 const showKey = ref(false)
 const dirty = ref(false)
@@ -118,10 +116,10 @@ async function onTest(): Promise<void> {
   try {
     const r = await modelTestConnection()
     testResult.value = translateStage(r)
-    push(testResult.value, r.ok ? 'success' : 'error')
+    notify(testResult.value, r.ok ? 'success' : 'error')
   } catch (err) {
     testResult.value = `测试失败：${err instanceof Error ? err.message : String(err)}`
-    push(testResult.value, 'error')
+    notify(testResult.value, 'error')
   } finally {
     testing.value = false
   }
@@ -131,7 +129,7 @@ onMounted(async () => {
   if (!conn.loaded) {
     try {
       await conn.loadModel()
-    } catch { /* 降级：默认值 */ }
+    } catch (err) { logger.warn('ModelConfig', 'loadModel降级', err) }
   }
 })
 
@@ -149,16 +147,15 @@ defineExpose({ isDirty: () => dirty.value })
       >●未保存</span>
       <span v-else class="text-[11px] leading-4 text-muted-foreground">已保存</span>
       <div class="ml-auto flex items-center gap-1.5">
-        <Button
+        <el-button
           data-testid="model-test"
-          size="sm"
-          variant="outline"
-          class="h-7 text-xs"
+          size="small"
+          plain
           :disabled="testing"
           @click="onTest"
-        >{{ testing ? '测试中…' : '测试连接' }}</Button>
-        <Button data-testid="model-save" size="sm" class="h-7 text-xs" @click="onSave">保存</Button>
-        <Button size="sm" variant="ghost" class="h-7 px-2 text-xs" @click="onCancel">取消</Button>
+        >{{ testing ? '测试中…' : '测试连接' }}</el-button>
+        <el-button data-testid="model-save" type="primary" size="small" @click="onSave">保存</el-button>
+        <el-button size="small" text @click="onCancel">取消</el-button>
       </div>
     </div>
 
@@ -196,21 +193,22 @@ defineExpose({ isDirty: () => dirty.value })
         </div>
         <div class="flex items-center gap-2 text-xs">
           <span class="shrink-0 text-muted-foreground">路径</span>
-          <Input
+          <el-input
             data-testid="model-api-base"
-            class="h-6 flex-1 text-xs"
+            size="small"
+            class="flex-1"
             :model-value="conn.profile.apiBase"
             @update:model-value="conn.profile.apiBase = String($event); markDirty()"
             @blur="onApiBaseBlur"
           />
-          <Button size="sm" variant="ghost" class="h-6 shrink-0 px-1.5 text-[11px]" title="重置默认" @click="onResetApiBase">重置</Button>
+          <el-button size="small" text title="重置默认" @click="onResetApiBase">重置</el-button>
         </div>
         <div class="flex items-center gap-2 text-xs">
           <span class="shrink-0 text-muted-foreground">密钥</span>
           <div class="relative min-w-0 flex-1">
-            <Input
+            <el-input
               data-testid="model-api-key"
-              class="h-6 w-full pr-7 text-xs"
+              size="small"
               :type="showKey ? 'text' : 'password'"
               :model-value="conn.profile.apiKey"
               :placeholder="keyPlaceholder"
@@ -258,8 +256,9 @@ defineExpose({ isDirty: () => dirty.value })
             />
             <span>代理启用</span>
           </label>
-          <Input
-            class="h-6 flex-1 text-xs"
+          <el-input
+            size="small"
+            class="flex-1"
             :disabled="!conn.profile.proxyOn"
             :placeholder="proxyPlaceholder"
             :model-value="conn.profile.proxyUrl"
@@ -306,7 +305,7 @@ defineExpose({ isDirty: () => dirty.value })
 
     <!-- 底栏：恢复默认 + 测试结果 -->
     <div class="flex flex-wrap items-center gap-2">
-      <Button size="sm" variant="ghost" class="h-6 px-2 text-[11px]" @click="onResetDefault">恢复默认</Button>
+      <el-button size="small" text @click="onResetDefault">恢复默认</el-button>
       <span v-if="testResult" class="text-[11px] text-muted-foreground">{{ testResult }}</span>
     </div>
   </section>

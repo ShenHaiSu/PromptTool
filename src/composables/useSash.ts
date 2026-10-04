@@ -1,6 +1,8 @@
 import { ref, watch } from 'vue'
+import { STORAGE_KEYS } from '@/lib/storageKeys'
+import { logger } from '@/lib/logger'
 
-const STORAGE_KEY = 'pmf:sash'
+const STORAGE_KEY = STORAGE_KEYS.SASH
 const DEFAULT = [0.28, 0.42] as const // left 28%, center 42%, right 30% 余量 — need04 黄金位重排
 
 function load(): [number, number] {
@@ -12,7 +14,9 @@ function load(): [number, number] {
         return [arr[0]!, arr[1]!]
       }
     }
-  } catch { /* ignore */ }
+  } catch (e) {
+    logger.warn('useSash', '读取分栏比例失败，回落默认值：', e)
+  }
   return [DEFAULT[0], DEFAULT[1]]
 }
 
@@ -22,7 +26,11 @@ export function useSash() {
 
   // 持久化
   watch([leftFrac, centerFrac], () => {
-    try { localStorage.setItem(STORAGE_KEY, JSON.stringify([leftFrac.value, centerFrac.value])) } catch { /* ignore */ }
+    try {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify([leftFrac.value, centerFrac.value]))
+    } catch (e) {
+      logger.warn('useSash', '保存分栏比例失败：', e)
+    }
   })
 
   function setFracs(left: number, center: number): void {

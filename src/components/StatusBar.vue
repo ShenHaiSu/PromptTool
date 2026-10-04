@@ -1,5 +1,4 @@
 <script setup lang="ts">
-import { Button } from '@/components/ui/button'
 import { useThemeStore } from '@/stores/theme'
 import { useAssemblyStore } from '@/stores/assembly'
 import { useHistoryStore } from '@/stores/history'
@@ -36,52 +35,47 @@ const statsUi = useStatsReport()
       <span data-testid="status-model" class="rounded bg-background px-1.5 py-0.5 font-mono">{{ assembly.config.modelProfile.toUpperCase() }}</span>
     </div>
     <div class="flex items-center gap-2">
-      <Button
+      <el-button
         data-testid="segment-import-toggle"
-        variant="ghost"
-        size="sm"
-        class="h-6 px-2 text-xs"
+        text
+        size="small"
         @click="emit('toggle-segment-import')"
       >
         📥 分段导入
-      </Button>
-      <Button
+      </el-button>
+      <el-button
         data-testid="library-toggle"
-        variant="ghost"
-        size="sm"
-        class="h-6 px-2 text-xs"
+        text
+        size="small"
         @click="emit('toggle-library')"
       >
         📚 词库
-      </Button>
-      <Button
+      </el-button>
+      <el-button
         data-testid="status-stats-report"
-        variant="ghost"
-        size="sm"
-        class="h-6 px-2 text-xs"
+        text
+        size="small"
         @click="statsUi.open()"
       >
         📊 报表
-      </Button>
+      </el-button>
       <span class="hidden sm:inline">就绪 · Tauri P3</span>
-      <Button
+      <el-button
         data-testid="db-manager-toggle"
-        variant="ghost"
-        size="sm"
-        class="h-6 px-2 text-xs"
+        text
+        size="small"
         @click="emit('toggle-db-manager')"
       >
         🗄️ 数据库
-      </Button>
-      <Button
+      </el-button>
+      <el-button
         data-testid="theme-toggle"
-        variant="ghost"
-        size="sm"
-        class="h-6 px-2 text-xs"
+        text
+        size="small"
         @click="theme.toggle()"
       >
         {{ theme.mode === 'light' ? '🌙 深色' : '☀️ 浅色' }}
-      </Button>
+      </el-button>
     </div>
   </footer>
 </template>

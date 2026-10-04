@@ -5,6 +5,8 @@
 
 import type { Dimension } from '@/engine/models'
 
+import { isParsableJson } from '@/lib/jsonProbe'
+import { logger } from '@/lib/logger'
 // ------------------------------------------------------------------
 // Raw types
 // ------------------------------------------------------------------
@@ -76,12 +78,8 @@ function extractJsonBlock(text: string): string | null {
   const end = text.lastIndexOf('}')
   if (start === -1 || end === -1 || end <= start) return null
   const candidate = text.slice(start, end + 1)
-  try {
-    JSON.parse(candidate)
-    return candidate
-  } catch {
-    return null
-  }
+  if (isParsableJson(candidate)) return candidate
+  return null
 }
 
 function normalizeKey(key: string): string {
@@ -93,17 +91,14 @@ export function detectFormat(text: string): 'json' | 'tagged' | 'unknown' {
   if (!t) return 'unknown'
   if (t.startsWith('{') || t.startsWith('[')) {
     const block = extractJsonBlock(t) ?? t
-    try {
-      JSON.parse(block)
+    if (isParsableJson(block)) {
       const hasKeywords = /"(format|prompts|segments|dimensionKey)"/.test(block)
       if (hasKeywords || t.startsWith('{')) return 'json'
-    } catch {
-      // fallthrough — maybe still json with fences
     }
     // Try stripping fences
     const stripped = t.replace(/^```(?:json)?\s*/i, '').replace(/```\s*$/i, '').trim()
     if (stripped.startsWith('{') || stripped.startsWith('[')) {
-      try { JSON.parse(stripped); return 'json' } catch {}
+      if (isParsableJson(stripped)) return 'json'
       const inner = extractJsonBlock(stripped)
       if (inner) return 'json'
     }
@@ -335,6 +330,7 @@ export function parseSegmentsText(text: string): { batch: RawBatch; kind: 'json'
       // Top-level array shorthand already handled; also support raw array of strings? No
       return { batch, kind: 'json', errors }
     } catch (e) {
+      logger.warn('segmentParse', 'pmf-segments JSON 解析失败：', e)
       return { batch: { prompts: [] }, kind: 'json', errors: [`JSON 解析失败: ${String((e as Error).message ?? e)}`] }
     }
   }

@@ -1,13 +1,11 @@
 <script setup lang="ts">
 import { ref, computed } from 'vue'
-import { Badge } from '@/components/ui/badge'
-import { Button } from '@/components/ui/button'
-import { Card } from '@/components/ui/card'
-import { useToast } from '@/composables/useToast'
+import { notify } from '@/lib/notify'
 import { exportSingleCsv } from '@/lib/export'
 import { evaluateRules } from '@/engine/ruleEngine'
 import { useRulesStore } from '@/stores/rules'
 import type { PromptIR } from '@/engine/models'
+import { logger } from '@/lib/logger'
 import IrConflictEditorDialog from './IrConflictEditorDialog.vue'
 
 const props = withDefaults(defineProps<{
@@ -29,17 +27,18 @@ const emit = defineEmits<{
 const expanded = ref(false)
 const showIr = ref(false)
 const showIrEditor = ref(false)
-const { push } = useToast()
 
 let rulesStore: ReturnType<typeof useRulesStore> | null = null
 function getRulesStore(): ReturnType<typeof useRulesStore> | null {
   try {
     rulesStore ??= useRulesStore()
     return rulesStore
-  } catch { return null }
+  } catch (err) {
+    logger.warn('PromptPreview', 'getRulesStore', err)
+    return null
+  }
 }
 
-// need02：badge 优先读 findings（✓/⚠/⛔），fallback 老关键字分类
 const liveFindings = computed(() => {
   if (!props.ir) return []
   try {
@@ -47,13 +46,16 @@ const liveFindings = computed(() => {
     const rules = store ? store.toEngineRules() : []
     if (rules.length === 0) return props.ir.findings ?? []
     return evaluateRules({ segments: props.ir.segments, rules })
-  } catch { return props.ir.findings ?? [] }
+  } catch (err) {
+    logger.warn('PromptPreview', 'liveFindings', err)
+    return props.ir.findings ?? []
+  }
 })
 
-const badgeVariant = computed(() => {
-  if (liveFindings.value.some((f) => f.severity === 'error')) return 'destructive'
-  if (liveFindings.value.length > 0 || hasWarnings.value) return 'destructive'
-  return 'secondary'
+const badgeType = computed(() => {
+  if (liveFindings.value.some((f) => f.severity === 'error')) return 'danger' as const
+  if (liveFindings.value.length > 0 || hasWarnings.value) return 'warning' as const
+  return 'info' as const
 })
 
 const isEmpty = computed(() => !props.prompt?.trim())
@@ -76,7 +78,8 @@ const irJson = computed(() => {
   if (!props.ir) return '—'
   try {
     return JSON.stringify({ segments: props.ir.segments, warnings: props.ir.warnings }, null, 2)
-  } catch {
+  } catch (err) {
+    logger.warn('PromptPreview', 'irJson', err)
     return String(props.ir)
   }
 })
@@ -96,13 +99,14 @@ function onToggleIr(): void {
 
 async function onCopy(): Promise<void> {
   if (!props.prompt?.trim()) {
-    push('暂无可复制的 Prompt', 'warning')
+    notify('暂无可复制的 Prompt', 'warning')
     return
   }
   try {
     await navigator.clipboard.writeText(props.prompt)
-    push('已复制到剪贴板', 'success', 1500)
-  } catch {
+    notify('已复制到剪贴板', 'success', 1500)
+  } catch (err) {
+    logger.warn('PromptPreview', 'copy降级', err)
     const ta = document.createElement('textarea')
     ta.value = props.prompt
     ta.style.position = 'fixed'
@@ -111,35 +115,35 @@ async function onCopy(): Promise<void> {
     ta.select()
     document.execCommand('copy')
     document.body.removeChild(ta)
-    push('已复制到剪贴板', 'success', 1500)
+    notify('已复制到剪贴板', 'success', 1500)
   }
 }
 
 function onExport(): void {
   if (!props.prompt?.trim()) {
-    push('暂无可导出的 Prompt', 'warning')
+    notify('暂无可导出的 Prompt', 'warning')
     return
   }
   if (!props.ir) {
     const fakeIr = { segments: [{ dimensionKey: '', text: props.prompt, weight: 1, sourceModuleId: '' }], warnings: props.warnings ?? [] } as PromptIR
     exportSingleCsv(fakeIr, props.prompt)
-    push('已导出 CSV', 'success', 1500)
+    notify('已导出 CSV', 'success', 1500)
     return
   }
   exportSingleCsv(props.ir, props.prompt)
-  push('已导出 CSV', 'success', 1500)
+  notify('已导出 CSV', 'success', 1500)
 }
 
 function onKeydown(e: KeyboardEvent): void {
   if (e.key === 'Escape') {
-    if (showIrEditor.value) return // 编辑器自行处理 Esc
+    if (showIrEditor.value) return
     onClose()
   }
 }
 
 function onOpenIrEditor(): void {
   const store = getRulesStore()
-  if (store && !store.loaded) void store.fetchAll().catch(() => { /* 编辑器内展示 loadError */ })
+  if (store && !store.loaded) void store.fetchAll().catch((err: unknown) => logger.warn('PromptPreview', 'fetchAll', err))
   showIrEditor.value = true
 }
 </script>
@@ -152,42 +156,37 @@ function onOpenIrEditor(): void {
     @click.self="onClose"
     @keydown="onKeydown"
   >
-    <Card
+    <div
       data-testid="preview-dialog"
-      class="flex max-h-[min(78vh,720px)] w-[min(720px,92vw)] flex-col p-4 shadow-xl"
+      role="dialog"
+      aria-label="预览"
+      class="flex max-h-[86vh] w-[720px] max-w-full flex-col rounded-lg border bg-card p-4 shadow-xl"
       @click.stop
     >
-      <!-- 标题行 -->
-      <div class="flex items-center justify-between">
-        <div class="flex items-center gap-2">
-          <h3 class="text-sm font-semibold">预览</h3>
-          <Badge :variant="badgeVariant" data-testid="preview-badge">{{ badgeText }}</Badge>
-        </div>
-        <div class="flex items-center gap-1">
-          <Button data-testid="preview-copy-btn" variant="outline" size="sm" class="h-7 text-xs" :disabled="isEmpty" @click="onCopy">复制</Button>
-          <Button data-testid="preview-export-btn" variant="outline" size="sm" class="h-7 text-xs" :disabled="isEmpty" @click="onExport">导出</Button>
-          <Button data-testid="ir-editor-open" variant="outline" size="sm" class="h-7 text-xs" :disabled="!ir" title="打开 IR 冲突编辑器：分段改字/改权重/删段/排序，一键修复冲突" @click="onOpenIrEditor">冲突编辑</Button>
-          <Button variant="ghost" size="sm" class="h-7 w-7 p-0" @click="onClose">✕</Button>
-        </div>
+      <div class="flex items-center gap-2">
+        <span class="text-sm font-semibold">预览</span>
+        <el-tag size="small" :type="badgeType" data-testid="preview-badge">{{ badgeText }}</el-tag>
       </div>
-
-      <!-- Prompt 全文 -->
+      <div class="mt-2 flex items-center gap-1">
+        <el-button data-testid="preview-copy-btn" plain size="small" :disabled="isEmpty" @click="onCopy">复制</el-button>
+        <el-button data-testid="preview-export-btn" plain size="small" :disabled="isEmpty" @click="onExport">导出</el-button>
+        <el-button data-testid="ir-editor-open" plain size="small" :disabled="!ir" title="打开 IR 冲突编辑器：分段改字/改权重/删段/排序，一键修复冲突" @click="onOpenIrEditor">冲突编辑</el-button>
+        <el-button text size="small" @click="onClose">✕</el-button>
+      </div>
       <div class="mt-3 rounded-md border bg-muted/30 p-3">
         <p v-if="isEmpty" data-testid="preview-empty" class="font-mono text-sm text-muted-foreground">暂无拼装 — 从左侧添加词条后此处实时预览</p>
         <template v-else>
           <p data-testid="preview-prompt" class="font-mono text-sm whitespace-pre-wrap break-words" :class="expanded ? '' : 'line-clamp-4'">{{ prompt }}</p>
           <div class="mt-2 flex items-center justify-between">
             <span class="text-xs text-muted-foreground">{{ prompt.length }} 字符 · {{ ir?.segments.length ?? 0 }} 段</span>
-            <Button v-if="prompt.length > 400" data-testid="preview-expand-btn" variant="ghost" size="sm" class="h-6 text-xs" @click="toggleExpanded">{{ expanded ? '折叠' : '展开' }}</Button>
+            <el-button v-if="prompt.length > 400" data-testid="preview-expand-btn" text size="small" @click="toggleExpanded">{{ expanded ? '折叠' : '展开' }}</el-button>
           </div>
         </template>
       </div>
-
-      <!-- IR 审阅 -->
       <div data-testid="preview-ir-area" class="mt-3 flex min-h-0 flex-1 flex-col rounded-md border bg-muted/20 p-3">
         <div class="flex items-center justify-between">
           <span class="text-xs font-medium text-muted-foreground">PromptIR — 中间表示</span>
-          <Button data-testid="preview-ir-toggle" variant="ghost" size="sm" class="h-6 text-xs" @click="onToggleIr">{{ showIr ? '隐藏 IR' : '显示 IR' }}</Button>
+          <el-button data-testid="preview-ir-toggle" text size="small" @click="onToggleIr">{{ showIr ? '隐藏 IR' : '显示 IR' }}</el-button>
         </div>
         <div v-if="showIr" class="mt-2 flex min-h-0 flex-1 gap-3 overflow-hidden">
           <pre data-testid="preview-ir-json" class="max-h-[22vh] flex-1 overflow-auto rounded bg-muted p-2 font-mono text-xs">{{ irJson }}</pre>
@@ -201,13 +200,10 @@ function onOpenIrEditor(): void {
           <p v-else class="text-xs text-muted-foreground">无警告 · IR 已就绪</p>
         </div>
       </div>
-
       <div class="mt-3 flex justify-end">
-        <Button data-testid="preview-close-btn" variant="outline" size="sm" class="h-7 text-xs" @click="onClose">关闭</Button>
+        <el-button data-testid="preview-close-btn" plain size="small" @click="onClose">关闭</el-button>
       </div>
-    </Card>
-
-    <!-- need02：IR 冲突编辑器（applied 后预览由 assembly 真源自动更新） -->
+    </div>
     <IrConflictEditorDialog :open="showIrEditor" :ir="ir" @update:open="showIrEditor = $event" />
   </div>
 </template>

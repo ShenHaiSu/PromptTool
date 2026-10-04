@@ -1,8 +1,5 @@
 <script setup lang="ts">
 import { ref, watch, computed } from 'vue'
-import { Button } from '@/components/ui/button'
-import { Input } from '@/components/ui/input'
-import { Card } from '@/components/ui/card'
 import type { Dimension, Module } from '@/engine/models'
 
 const props = withDefaults(defineProps<{
@@ -84,98 +81,91 @@ function onKeydown(e: KeyboardEvent): void {
     @click.self="onClose"
     @keydown="onKeydown"
   >
-    <Card
+    <el-dialog
+      :model-value="open"
+      :title="title"
+      width="460px"
+      destroy-on-close
+      :append-to-body="false"
       data-testid="module-edit-dialog"
-      class="w-full max-w-md p-4 shadow-xl"
+      @close="onClose"
       @click.stop
     >
-      <h3 class="text-sm font-semibold">{{ title }}</h3>
-      <div class="mt-3 space-y-3">
-        <label class="flex flex-col gap-1">
-          <span class="text-xs text-muted-foreground">所属维度 *</span>
-          <select
+      <el-form label-width="96px" :rules="{ contentEn: [{ required: true, message: '英文提示词必填', trigger: 'blur' }] }" @submit.prevent>
+        <el-form-item label="所属维度" required>
+          <el-select
             data-testid="module-edit-dimension"
             v-model="dimensionId"
             :disabled="isEdit"
             :title="isEdit ? '编辑模式下维度不可修改' : ''"
-            class="h-8 rounded-md border bg-background px-3 text-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:opacity-60"
+            class="w-full"
           >
-            <option v-for="d in dimensions" :key="d.id" :value="d.id">{{ d.nameCn }} / {{ d.key }}</option>
-          </select>
+            <el-option v-for="d in dimensions" :key="d.id" :value="d.id" :label="`${d.nameCn} / ${d.key}`" />
+          </el-select>
           <span v-if="isEdit" class="text-[11px] text-muted-foreground">编辑模式下此字段只读</span>
-        </label>
-        <label class="flex flex-col gap-1">
-          <span class="text-xs text-muted-foreground">英文提示词 (content) *</span>
-          <Input
+        </el-form-item>
+        <el-form-item label="英文提示词" required>
+          <el-input
             data-testid="module-edit-contentEn"
             v-model="contentEn"
             placeholder="如: white shirt"
-            class="h-8 text-sm"
           />
           <span class="text-[11px] text-muted-foreground">该词条实际拼入 Prompt 的英文内容</span>
-        </label>
-        <label class="flex flex-col gap-1">
-          <span class="text-xs text-muted-foreground">中文显示名 (可选)</span>
-          <Input
+        </el-form-item>
+        <el-form-item label="中文显示名">
+          <el-input
             data-testid="module-edit-displayName"
             v-model="displayName"
             placeholder="如: 白衬衫（不填则回退显示英文）"
-            class="h-8 text-sm"
           />
-        </label>
-        <label class="flex flex-col gap-1">
-          <span class="text-xs text-muted-foreground">权重</span>
-          <div class="flex items-center gap-2">
-            <input
+        </el-form-item>
+        <el-form-item label="权重">
+          <div class="flex w-full items-center gap-2">
+            <el-slider
               data-testid="module-edit-weight-slider"
-              type="range"
+              v-model="weight"
               :min="0.5"
               :max="2.0"
               :step="0.1"
-              v-model.number="weight"
               class="flex-1"
             />
-            <input
+            <el-input-number
               data-testid="module-edit-weight"
-              v-model.number="weight"
-              type="number"
+              v-model="weight"
               :min="0.5"
               :max="2.0"
               :step="0.1"
-              class="flex h-8 w-20 rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+              size="small"
+              class="w-24"
             />
           </div>
-        </label>
-        <label class="flex items-center gap-2">
-          <input
+        </el-form-item>
+        <el-form-item label="NSFW">
+          <el-switch
             data-testid="module-edit-nsfw"
-            type="checkbox"
             v-model="isNsfw"
-            class="h-3.5 w-3.5 rounded border-input"
           />
-          <span class="text-xs text-muted-foreground">NSFW (仅对随机生成生效)</span>
-        </label>
-        <label class="flex flex-col gap-1">
-          <span class="text-xs text-muted-foreground">备注 (可选)</span>
-          <Input
+          <span class="ml-2 text-xs text-muted-foreground">仅对随机生成生效</span>
+        </el-form-item>
+        <el-form-item label="备注">
+          <el-input
             data-testid="module-edit-notes"
             v-model="notes"
             placeholder="备注信息"
-            class="h-8 text-sm"
           />
-        </label>
-      </div>
-      <div class="mt-4 flex justify-end gap-2">
-        <Button data-testid="module-edit-cancel" variant="ghost" size="sm" class="h-7 text-xs" @click="onClose">取消</Button>
-        <Button
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button data-testid="module-edit-cancel" text size="small" @click="onClose">取消</el-button>
+        <el-button
           data-testid="module-edit-confirm"
-          size="sm"
-          class="h-7 text-xs"
+          type="primary"
+          size="small"
           :disabled="!dimensionId || !contentEn.trim()"
           @click="onConfirm"
-        >保存</Button>
-      </div>
+        >保存</el-button>
+      </template>
       <p class="mt-2 text-[11px] text-muted-foreground">Ctrl+Enter 快速确认 · Esc 关闭</p>
-    </Card>
+    </el-dialog>
   </div>
 </template>

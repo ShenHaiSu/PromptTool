@@ -4,6 +4,8 @@
  */
 import type { PromptIR } from './models'
 
+import { logger } from '@/lib/logger'
+
 export const STORAGE_KEY = 'pmf:randomHistory:v1'
 export const ALPHA = 1.0
 export const WINDOW_SIZE = 20
@@ -93,7 +95,8 @@ function getStorage(): Storage | null {
       return (window as unknown as { localStorage: Storage }).localStorage
     }
     return null
-  } catch {
+  } catch (e) {
+    logger.warn('randomHistory', '获取 localStorage 失败：', e)
     return null
   }
 }
@@ -115,7 +118,8 @@ export function loadHistory(): RandomHistoryState {
       scopeAccessOrder:
         (p.scopeAccessOrder as string[]) ?? Object.keys((p.recentByScope as Record<string, string[]>) ?? {}),
     }
-  } catch {
+  } catch (e) {
+    logger.warn('randomHistory', '加载随机历史失败（按空历史处理）：', e)
     return emptyHistory()
   }
 }
@@ -125,8 +129,9 @@ export function saveHistory(state: RandomHistoryState): void {
     const storage = getStorage()
     if (!storage) return
     storage.setItem(STORAGE_KEY, JSON.stringify(state))
-  } catch {
+  } catch (e) {
     // 静默降级
+    logger.warn('randomHistory', '保存随机历史失败（静默降级）：', e)
   }
 }
 
@@ -135,7 +140,8 @@ export function clearHistory(): void {
     const storage = getStorage()
     if (!storage) return
     storage.removeItem(STORAGE_KEY)
-  } catch {
+  } catch (e) {
     // 静默降级
+    logger.warn('randomHistory', '清除随机历史失败（静默降级）：', e)
   }
 }

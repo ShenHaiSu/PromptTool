@@ -1,6 +1,5 @@
 <script setup lang="ts">
 import { ref, watch } from 'vue'
-import { Button } from '@/components/ui/button'
 import type { Dimension } from '@/engine/models'
 
 // Need08 — 维度迁移确认对话框（单步确认，无步骤条）
@@ -40,7 +39,7 @@ function onConfirm(): void {
     <div class="flex max-h-[86vh] w-full max-w-lg flex-col rounded-lg border bg-background shadow-xl">
       <div class="flex items-center justify-between border-b px-4 py-3">
         <h2 class="text-sm font-semibold">迁移维度「{{ dimension ? `${dimension.nameCn} / ${dimension.key}` : '—' }}」？</h2>
-        <Button size="sm" variant="ghost" class="h-7 px-2 text-xs" data-testid="migrate-cancel-top" :disabled="busy" @click="onClose">✕</Button>
+        <el-button size="small" text data-testid="migrate-cancel-top" :disabled="busy" @click="onClose">✕</el-button>
       </div>
       <div class="space-y-2 overflow-y-auto px-4 py-3 text-sm">
         <p>该维度现有 {{ count }} 条片段，将整体归档并重建空白维度：</p>
@@ -60,15 +59,14 @@ function onConfirm(): void {
         </label>
       </div>
       <div class="flex justify-end gap-2 border-t px-4 py-3">
-        <Button size="sm" variant="outline" class="h-8 text-xs" data-testid="migrate-cancel" :disabled="busy" @click="onClose">取消</Button>
-        <Button
-          size="sm"
-          variant="destructive"
-          class="h-8 text-xs"
+        <el-button size="small" plain data-testid="migrate-cancel" :disabled="busy" @click="onClose">取消</el-button>
+        <el-button
+          size="small"
+          type="danger"
           data-testid="migrate-confirm-btn"
           :disabled="!agreed || busy"
           @click="onConfirm"
-        >{{ busy ? '迁移中…' : `确认迁移（${count} 条）` }}</Button>
+        >{{ busy ? '迁移中…' : `确认迁移（${count} 条）` }}</el-button>
       </div>
     </div>
   </div>
