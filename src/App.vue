@@ -3,8 +3,9 @@
  import DimensionPanel from '@/components/DimensionPanel.vue'
  import BatchFactory from '@/components/BatchFactory.vue'
  import ImageQueuePanel from '@/components/ImageQueuePanel.vue'
- import SingleShotPanel from '@/components/SingleShotPanel.vue'
- import StatsReportDialog from '@/components/StatsReportDialog.vue'
+  import SingleShotPanel from '@/components/SingleShotPanel.vue'
+  import ImageMetaPanel from '@/components/ImageMetaPanel.vue'
+  import StatsReportDialog from '@/components/StatsReportDialog.vue'
  import HistoryPanel from '@/components/HistoryPanel.vue'
  import StatusBar from '@/components/StatusBar.vue'
  import LibraryDialog from '@/components/LibraryDialog.vue'
@@ -79,8 +80,8 @@ const showLibraryDialog = ref(false)
 const showSegmentImport = ref(false)
 const dimensionPanelRef = ref<{ refresh: () => Promise<void> } | null>(null)
 const batchFactoryRef = ref<{ refresh: () => Promise<void> } | null>(null)
- // F3 §4 + need01 需求4：中间栏 Tabs（本地 ref，不持久化，默认停留在 prompt；single 按需挂载）
- const centerTab = ref<'prompt' | 'image' | 'single'>('prompt')
+  // F3 §4 + need01 需求4：中间栏 Tabs（本地 ref，不持久化，默认停留在 prompt；single/meta 按需挂载）
+  const centerTab = ref<'prompt' | 'image' | 'single' | 'meta'>('prompt')
 
 function syncCountsFromLibrary(): void {
   if (library.dimensions.length) dimCount.value = library.dimensions.length
@@ -161,48 +162,54 @@ function onPointerUp(e: PointerEvent): void {
   document.body.style.cursor = ''
 }
 
-onMounted(async () => {
-  try {
-    const { persistGeometry } = await import('@/composables/usePersist')
-    persistGeometry()
-  } catch { /* ignore */ }
-
-  onEvent(LIBRARY_CHANGED, handleLibraryChanged)
-
-  try {
-    await dbRegistry.fetchActiveInfo()
-    await dbRegistry.fetchList()
-    if (!dbRegistry.activeInfo?.foreground) {
-      dbRegistry.onboardingOpen = true
-      return
-    }
-  } catch {
-    dbRegistry.onboardingOpen = true
-    return
-  }
-
-  try {
-    // need06: library 是维度面板与随机侧的唯一数据源
-    await library.fetchAll()
-    syncCountsFromLibrary()
-    try {
-      const carry = await dbGetTempCarry()
-      if (carry && carry.selectedItemIds?.length) {
-        const grouped = library.modulesByDim as Record<string, { id: string; dimensionId?: string }[]>
-        const idToModule = new Map<string, { id: string; dimensionId?: string }>()
-        for (const arr of Object.values(grouped)) for (const m of arr) idToModule.set(m.id, m)
-        const items = carry.selectedItemIds.map((id) => {
-          const mod = idToModule.get(id)
-          if (!mod) return null
-          const w = carry.weightDraft?.[id] ?? null
-          return { module: mod, locked: false, weightOverride: w }
-        }).filter(Boolean) as typeof assembly.selectedItems
-        if (items.length) assembly.setSelected(items)
-      }
-    } catch { /* ignore carry */ }
-  } catch { /* ignore */ }
-  try { await historyStore.fetchAll() } catch { /* ignore */ }
-})
+ onMounted(async () => {
+   try {
+     const { persistGeometry } = await import('@/composables/usePersist')
+     persistGeometry()
+   } catch { /* ignore */ }
+ 
+   onEvent(LIBRARY_CHANGED, handleLibraryChanged)
+ 
+   // need01-02B：连接配置独立预加载（单发与队列共用，直进单发不经队列即可生成）
+   try {
+     const { useConnectionProfileStore } = await import('@/stores/connectionProfile')
+     await useConnectionProfileStore().loadConnection()
+   } catch { /* 降级：单发内再次尝试 */ }
+ 
+   try {
+     await dbRegistry.fetchActiveInfo()
+     await dbRegistry.fetchList()
+     if (!dbRegistry.activeInfo?.foreground) {
+       dbRegistry.onboardingOpen = true
+       return
+     }
+   } catch {
+     dbRegistry.onboardingOpen = true
+     return
+   }
+ 
+   try {
+     // need06: library 是维度面板与随机侧的唯一数据源
+     await library.fetchAll()
+     syncCountsFromLibrary()
+     try {
+       const carry = await dbGetTempCarry()
+       if (carry && carry.selectedItemIds?.length) {
+         const grouped = library.modulesByDim as Record<string, { id: string; dimensionId?: string }[]>
+         const idToModule = new Map<string, { id: string; dimensionId?: string }>()
+         for (const arr of Object.values(grouped)) for (const m of arr) idToModule.set(m.id, m)
+         const items = carry.selectedItemIds.map((id) => {
+           const mod = idToModule.get(id)
+           if (!mod) return null
+           const w = carry.weightDraft?.[id] ?? null
+           return { module: mod, locked: false, weightOverride: w }
+         }).filter(Boolean) as typeof assembly.selectedItems
+         if (items.length) assembly.setSelected(items)
+       }
+     } catch { /* ignore carry */ }
+   } catch { /* ignore */ }
+   try { await historyStore.fetchAll() } catch { /* ignore */ }
+ })
 
 onBeforeUnmount(() => {
   offEvent(LIBRARY_CHANGED, handleLibraryChanged)
@@ -267,6 +274,14 @@ onBeforeUnmount(() => {
            >
              手动单发
            </button>
+           <button
+             data-testid="center-tab-meta"
+             class="h-6 rounded px-2 text-xs"
+             :class="centerTab === 'meta' ? 'bg-accent font-semibold' : 'text-muted-foreground'"
+             @click="centerTab = 'meta'"
+           >
+             图片解析
+           </button>
          </div>
          <div v-show="centerTab === 'prompt'" class="flex min-h-0 flex-1 flex-col overflow-hidden">
            <BatchFactory ref="batchFactoryRef" @switch-to-image="centerTab = 'image'" />
@@ -278,6 +293,10 @@ onBeforeUnmount(() => {
          <!-- 需求4 单发面板按需挂载：内存预览不进 Pinia，切 Tab 未保存即丢弃 -->
          <div v-if="centerTab === 'single'" class="flex min-h-0 flex-1 flex-col overflow-hidden">
            <SingleShotPanel />
+         </div>
+         <!-- need02-02 图片解析面板按需挂载：解析对象是任意外部文件，与队列正交；关闭 Tab 即释放预览 -->
+         <div v-if="centerTab === 'meta'" class="flex min-h-0 flex-1 flex-col overflow-hidden">
+           <ImageMetaPanel />
          </div>
       </section>
 
