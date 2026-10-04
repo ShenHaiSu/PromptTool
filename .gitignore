@@ -68,3 +68,9 @@ data/
 
 # ZCode session data
 .zcode/
+
+# Docs（默认不进版本控制：目录内容均忽略，需跟踪请用 ! 反向规则或 git add -f 强制加入）
+docs/**
+!docs/**/
+# 如需强制跟踪示例（取消注释并改成目标路径）：
+# !docs/need01/00_总览与无感升级原则.md

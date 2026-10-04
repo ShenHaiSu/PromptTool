@@ -1,1 +1,0 @@
-cargo pants, olive green, utility style
