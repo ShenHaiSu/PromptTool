@@ -14,3 +14,24 @@ html.dark {
   --el-bg-color: hsl(var(--background));
   --el-text-color-primary: hsl(var(--foreground));
 }
+/* need05 Q1v2: 中区首 Tab 左 gutter 确定性覆盖（唯一覆盖点）。
+ * v1 仅靠 App.vue 上 Tailwind 任意变体 [&_.el-tabs__header]:pl-3，验收机实测未生效；
+ * 此处以 [data-testid] 锚点做最终保证，不依赖 JIT 与组件 class 透传。 */
+[data-testid="panel-center"] > .el-tabs > .el-tabs__header {
+  padding-left: 12px; /* 对冲 EP 首 Tab padding-left:0；右侧 pr-14（FAB 让位）保留在 App.vue class 上 */
+}
+/* need05 Q5: 中区 pane 高度链路补 flex —— active pane 必须是有界 flex column，
+ * 否则 App.vue 各 pane 内包裹 div 的 flex-1/min-h-0（父为 block 时落空）全线失效，
+ * 生图队列任务一多即无滚动轴、底部栏被顶出裁掉。非 active pane 由 EP 内联 display:none 隐藏，不受影响。 */
+[data-testid="panel-center"] > .el-tabs > .el-tabs__content {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+[data-testid="panel-center"] > .el-tabs > .el-tabs__content > .el-tab-pane {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 0%;
+  min-height: 0;
+  overflow: hidden;
+}

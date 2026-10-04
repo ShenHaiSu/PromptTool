@@ -86,11 +86,11 @@ async function handleCreate(): Promise<void> {
 </script>
 
 <template>
-  <el-drawer v-model="openProxy" direction="rtl" size="420px" append-to-body data-testid="db-manager-drawer" title="数据库管理">
+  <el-drawer v-model="openProxy" direction="rtl" size="420px" append-to-body data-testid="db-manager-drawer">
+    <!-- need05 v2：关闭按钮只用 el-drawer 原生（默认 show-close=true），不手写 × -->
     <template #header>
-      <div class="flex items-center justify-between">
+      <div class="flex items-center">
         <h2 class="text-sm font-semibold">数据库管理</h2>
-        <el-button text size="small" data-testid="drawer-close" @click="emit('update:open', false)">×</el-button>
       </div>
     </template>
       <div class="flex-1 overflow-auto p-4 space-y-4">
