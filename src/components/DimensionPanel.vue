@@ -639,15 +639,14 @@ function onGenerateFromMenu(): void {
    const dim = clearTarget.value
    if (!dim) return
    if (clearing.value) { push('正在清空中…', 'info', 1500); return }
-   const grouped = library.modulesByDim as Record<string, Module[]>
-   const groupedKey = (grouped[dim.id] ? dim.id : (grouped[dim.key] ? dim.key : dim.id))
+   // need01-01 收敛：分组键唯一用 dim.id（不再回落 dim.key），单命令单键。
    const list = [...(modulesByDim.value[dim.id] ?? [])]
    if (list.length === 0) { clearConfirmOpen.value = false; return }
    clearing.value = true
-   // 乐观：一次置空该维度分组（单次赋值、单次渲染）；后端原子命令失败则用快照恢复
+   // 乐观：一次置空该维度分组（单次赋值、单次渲染）；原子失败=后端未动，恢复+fetchAll 对齐
    const snapshot = [...list]
    const g0 = library.modulesByDim as Record<string, Module[]>
-   library.modulesByDim = { ...g0, [groupedKey]: [] }
+   library.modulesByDim = { ...g0, [dim.id]: [] }
    try {
      const r = await dbClearDimension({ dimensionId: dim.id })
      const ids = new Set(list.map((m) => m.id))
@@ -659,7 +658,7 @@ function onGenerateFromMenu(): void {
      clearConfirmOpen.value = false
    } catch (e) {
      const g2 = library.modulesByDim as Record<string, Module[]>
-     g2[groupedKey] = snapshot
+     g2[dim.id] = snapshot
      library.modulesByDim = { ...g2 }
      emit(LIBRARY_CHANGED, { source: 'dimension-panel', op: 'clear-dimension-failed' })
      await library.fetchAll()
