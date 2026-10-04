@@ -2,6 +2,7 @@ import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
 import { dbGetDimensions, dbGetAllModulesGrouped } from '@/lib/db'
 import type { Dimension, Module } from '@/engine/models'
+import { logger } from '@/lib/logger'
 
 const THRESHOLD = 200
 const DEBOUNCE_MS = 10000
@@ -44,8 +45,9 @@ export const useLibraryStore = defineStore('library', () => {
       modulesByDim.value = grouped as Record<string, Module[]>
       dirty.value = false
       lastSyncedAt.value = Date.now()
-    } catch {
+    } catch (e) {
       // jsdom 无 Tauri 时降级：保留旧值
+      logger.warn('library', 'fetchAll 失败（jsdom 无 Tauri 时降级，保留旧值）：', e)
     } finally {
       loading.value = false
       syncing.value = false

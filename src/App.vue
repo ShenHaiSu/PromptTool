@@ -1,30 +1,33 @@
- <script setup lang="ts">
- import { ref, onMounted, onBeforeUnmount, computed, watch } from 'vue'
- import DimensionPanel from '@/components/DimensionPanel.vue'
- import BatchFactory from '@/components/BatchFactory.vue'
- import ImageQueuePanel from '@/components/ImageQueuePanel.vue'
-  import SingleShotPanel from '@/components/SingleShotPanel.vue'
-  import ModelConfigPanel from '@/components/ModelConfigPanel.vue'
+<script setup lang="ts">
+import { ref, computed, watch } from 'vue'
+// 仅按需引入具体模块：禁止从 'element-plus' 根barrel 导入（会把全量 EP 打进产物）
+import { ElMessageBox } from 'element-plus/es/components/message-box/index.mjs'
+import zhCn from 'element-plus/es/locale/lang/zh-cn'
+import DimensionPanel from '@/components/DimensionPanel.vue'
+import BatchFactory from '@/components/BatchFactory.vue'
+import ImageQueuePanel from '@/components/ImageQueuePanel.vue'
+import SingleShotPanel from '@/components/SingleShotPanel.vue'
+import ModelConfigPanel from '@/components/ModelConfigPanel.vue'
 import { useConnectionProfileStore } from '@/stores/connectionProfile'
-  import ImageMetaPanel from '@/components/ImageMetaPanel.vue'
-  import StatsReportDialog from '@/components/StatsReportDialog.vue'
- import HistoryPanel from '@/components/HistoryPanel.vue'
- import StatusBar from '@/components/StatusBar.vue'
- import LibraryDialog from '@/components/LibraryDialog.vue'
- import SegmentImportDialog from '@/components/SegmentImportDialog.vue'
- import { useAssemblyStore } from '@/stores/assembly'
- import { useHistoryStore } from '@/stores/history'
+import ImageMetaPanel from '@/components/ImageMetaPanel.vue'
+import StatsReportDialog from '@/components/StatsReportDialog.vue'
+import HistoryPanel from '@/components/HistoryPanel.vue'
+import StatusBar from '@/components/StatusBar.vue'
+import LibraryDialog from '@/components/LibraryDialog.vue'
+import SegmentImportDialog from '@/components/SegmentImportDialog.vue'
+import { useAssemblyStore } from '@/stores/assembly'
+import { useHistoryStore } from '@/stores/history'
 import { useSash } from '@/composables/useSash'
-import { appToasts, useToast } from '@/composables/useToast'
+import { notify } from '@/lib/notify'
 import { useShortcuts } from '@/composables/useShortcuts'
 import { useThemeStore } from '@/stores/theme'
+import { logger } from '@/lib/logger'
 import BusinessDbOnboardingDialog from '@/components/BusinessDbOnboardingDialog.vue'
 import DbManagerDrawer from '@/components/DbManagerDrawer.vue'
 import ImageTaskDetailDialog from '@/components/ImageTaskDetailDialog.vue'
 import { useDbRegistryStore } from '@/stores/dbRegistry'
 import { useLibraryStore } from '@/stores/library'
-import { dbGetTempCarry } from '@/lib/db'
-import { on as onEvent, off as offEvent, LIBRARY_CHANGED } from '@/lib/libraryEvents'
+import { useAppBootstrap } from '@/composables/useAppBootstrap'
 
 const assembly = useAssemblyStore()
 const historyStore = useHistoryStore()
@@ -33,7 +36,8 @@ const themeStore = useThemeStore()
 const library = useLibraryStore()
 void themeStore.mode
 const { leftFrac, centerFrac, setFracs } = useSash()
-const { push } = useToast()
+const push = notify
+const { dimCount, moduleCount, syncCountsFromLibrary } = useAppBootstrap()
 
 function focusSearch(): void {
   const el = document.querySelector<HTMLInputElement>('[data-testid="dimension-search"]')
@@ -56,7 +60,8 @@ async function doCopyShortcut(): Promise<void> {
   try {
     await navigator.clipboard.writeText(text)
     push('已复制到剪贴板（Ctrl+C）', 'success', 1500)
-  } catch {
+  } catch (err) {
+    logger.warn('App', 'clipboard降级', err)
     const ta = document.createElement('textarea')
     ta.value = text; ta.style.position = 'fixed'; ta.style.opacity = '0'
     document.body.appendChild(ta); ta.select()
@@ -73,36 +78,35 @@ function doRemoveShortcut(): void {
 
 useShortcuts({ focusSearch, save: doSaveShortcut, copy: doCopyShortcut, remove: doRemoveShortcut })
 
-const dimCount = ref(0)
-const moduleCount = ref(0)
-
 const showDbManager = ref(false)
-
 const showLibraryDialog = ref(false)
 const showSegmentImport = ref(false)
 const dimensionPanelRef = ref<{ refresh: () => Promise<void> } | null>(null)
 const batchFactoryRef = ref<{ refresh: () => Promise<void> } | null>(null)
-  // F3 §4 + need01 需求4：中间栏 Tabs（本地 ref，不持久化，默认停留在 prompt；single/meta 按需挂载）
-  const centerTab = ref<'prompt' | 'image' | 'single' | 'meta' | 'model'>('prompt')
-  const connProfile = useConnectionProfileStore()
-  const modelPanelRef = ref<{ isDirty?: () => boolean } | null>(null)
-  const modelKeyDot = computed(() => (connProfile.profile.apiKeyState === 'set' ? '●' : '○'))
-  function switchCenterTab(next: 'prompt' | 'image' | 'single' | 'meta' | 'model'): void {
-    if (centerTab.value === 'model' && next !== 'model') {
-      try {
-        if (modelPanelRef.value?.isDirty?.() && !window.confirm('模型配置未保存，确定切换？')) return
-      } catch { /* 忽略 */ }
+const centerTab = ref<'prompt' | 'image' | 'single' | 'meta' | 'model'>('prompt')
+const connProfile = useConnectionProfileStore()
+const modelPanelRef = ref<{ isDirty?: () => boolean } | null>(null)
+const modelKeyDot = computed(() => (connProfile.profile.apiKeyState === 'set' ? '●' : '○'))
+
+async function switchCenterTab(next: 'prompt' | 'image' | 'single' | 'meta' | 'model'): Promise<void> {
+  if (centerTab.value === 'model' && next !== 'model') {
+    try {
+      if (modelPanelRef.value?.isDirty?.()) {
+        try {
+          await ElMessageBox.confirm('模型配置未保存，确定切换？', '未保存', { type: 'warning' })
+        } catch {
+          const ok = window.confirm('模型配置未保存，确定切换？')
+          if (!ok) return
+          return
+        }
+        centerTab.value = next
+        return
+      }
+    } catch (err) {
+      logger.warn('App', 'switchCenterTab守卫', err)
     }
-    centerTab.value = next
   }
-
-function syncCountsFromLibrary(): void {
-  if (library.dimensions.length) dimCount.value = library.dimensions.length
-  if (library.total) moduleCount.value = library.total
-}
-
-function handleLibraryChanged(): void {
-  library.scheduleFetch()
+  centerTab.value = next
 }
 
 watch(() => library.total, () => { syncCountsFromLibrary() })
@@ -119,10 +123,11 @@ async function refreshStats(): Promise<void> {
     await library.fetchAll()
     syncCountsFromLibrary()
     await batchFactoryRef.value?.refresh()
-  } catch { /* ignore */ }
+  } catch (err) {
+    logger.warn('App', 'refreshStats', err)
+  }
 }
 
-// Layout refs for sash drag
 const layoutRef = ref<HTMLElement | null>(null)
 const dragging = ref<'left' | 'right' | null>(null)
 let startX = 0
@@ -166,7 +171,7 @@ function onPointerMove(e: PointerEvent): void {
 }
 
 function onPointerUp(e: PointerEvent): void {
-  try { (e.target as HTMLElement)?.releasePointerCapture?.(e.pointerId) } catch { /* ignore */ }
+  try { (e.target as HTMLElement)?.releasePointerCapture?.(e.pointerId) } catch (err) { logger.warn('App', 'releasePointer', err) }
   window.removeEventListener('pointermove', onPointerMove)
   window.removeEventListener('pointerup', onPointerUp)
   if (rafId != null) { cancelAnimationFrame(rafId); rafId = null }
@@ -174,209 +179,112 @@ function onPointerUp(e: PointerEvent): void {
   document.body.style.userSelect = ''
   document.body.style.cursor = ''
 }
-
- onMounted(async () => {
-   try {
-     const { persistGeometry } = await import('@/composables/usePersist')
-     persistGeometry()
-   } catch { /* ignore */ }
- 
-   onEvent(LIBRARY_CHANGED, handleLibraryChanged)
- 
-   // need01-02B：连接配置独立预加载（单发与队列共用，直进单发不经队列即可生成）
-   try {
-     const { useConnectionProfileStore } = await import('@/stores/connectionProfile')
-     await useConnectionProfileStore().loadModel()
-   } catch { /* 降级：单发内再次尝试 */ }
- 
-   try {
-     await dbRegistry.fetchActiveInfo()
-     await dbRegistry.fetchList()
-     if (!dbRegistry.activeInfo?.foreground) {
-       dbRegistry.onboardingOpen = true
-       return
-     }
-   } catch {
-     dbRegistry.onboardingOpen = true
-     return
-   }
- 
-   try {
-     // need06: library 是维度面板与随机侧的唯一数据源
-     await library.fetchAll()
-     syncCountsFromLibrary()
-     try {
-       const carry = await dbGetTempCarry()
-       if (carry && carry.selectedItemIds?.length) {
-         const grouped = library.modulesByDim as Record<string, { id: string; dimensionId?: string }[]>
-         const idToModule = new Map<string, { id: string; dimensionId?: string }>()
-         for (const arr of Object.values(grouped)) for (const m of arr) idToModule.set(m.id, m)
-         const items = carry.selectedItemIds.map((id) => {
-           const mod = idToModule.get(id)
-           if (!mod) return null
-           const w = carry.weightDraft?.[id] ?? null
-           return { module: mod, locked: false, weightOverride: w }
-         }).filter(Boolean) as typeof assembly.selectedItems
-         if (items.length) assembly.setSelected(items)
-       }
-     } catch { /* ignore carry */ }
-   } catch { /* ignore */ }
-   try { await historyStore.fetchAll() } catch { /* ignore */ }
- })
-
-onBeforeUnmount(() => {
-  offEvent(LIBRARY_CHANGED, handleLibraryChanged)
-  library.dispose()
-})
 </script>
 
 <template>
-  <div class="flex h-screen flex-col overflow-hidden bg-background text-foreground">
-    <div
-      ref="layoutRef"
-      data-testid="main-layout"
-      class="flex min-h-0 flex-1 overflow-hidden"
-      :style="{ contain: 'layout paint' }"
-    >
-      <section
-        data-testid="panel-left"
-        class="flex min-h-0 shrink-0 flex-col overflow-hidden border-r bg-card"
-        :style="{ width: leftPct }"
-      >
-        <DimensionPanel ref="dimensionPanelRef" />
-      </section>
-
+  <el-config-provider :locale="zhCn">
+    <div class="flex h-screen flex-col overflow-hidden bg-background text-foreground">
       <div
-        data-testid="sash-left"
-        class="flex w-2 shrink-0 items-center justify-center bg-border hover:bg-primary/20 cursor-col-resize select-none"
-        :class="dragging === 'left' ? 'bg-primary/30' : ''"
-        title="拖拽调整 左右比例"
-        @pointerdown="onSashPointerDown($event, 'left')"
+        ref="layoutRef"
+        data-testid="main-layout"
+        class="flex min-h-0 flex-1 overflow-hidden"
+        :style="{ contain: 'layout paint' }"
       >
-        <div class="h-8 w-0.5 rounded bg-muted-foreground/30" />
-      </div>
+        <section
+          data-testid="panel-left"
+          class="flex min-h-0 shrink-0 flex-col overflow-hidden border-r bg-card"
+          :style="{ width: leftPct }"
+        >
+          <DimensionPanel ref="dimensionPanelRef" />
+        </section>
 
-      <section
-        data-testid="panel-center"
-        class="flex min-h-0 shrink-0 flex-col overflow-hidden bg-background"
-        :style="{ width: centerPct }"
-      >
-         <!-- F3 §4 + need01 需求4：中间栏 Tabs（prompt-batch | image-queue | single），头高约 32px -->
-         <div class="flex h-8 shrink-0 items-center gap-1 border-b px-2">
-           <button
-             data-testid="center-tab-prompt"
-             class="h-6 rounded px-2 text-xs"
-             :class="centerTab === 'prompt' ? 'bg-accent font-semibold' : 'text-muted-foreground'"
-             @click="switchCenterTab('prompt')"
-           >
-             Prompt 批量
-           </button>
-           <button
-             data-testid="center-tab-image"
-             class="h-6 rounded px-2 text-xs"
-             :class="centerTab === 'image' ? 'bg-accent font-semibold' : 'text-muted-foreground'"
-             @click="switchCenterTab('image')"
-           >
-             生图队列
-           </button>
-           <button
-             data-testid="center-tab-single"
-             class="h-6 rounded px-2 text-xs"
-             :class="centerTab === 'single' ? 'bg-accent font-semibold' : 'text-muted-foreground'"
-             @click="switchCenterTab('single')"
-           >
-             手动单发
-           </button>
-           <button
-             data-testid="center-tab-meta"
-             class="h-6 rounded px-2 text-xs"
-             :class="centerTab === 'meta' ? 'bg-accent font-semibold' : 'text-muted-foreground'"
-             @click="switchCenterTab('meta')"
-           >
-             图片解析
-           </button>
-           <button
-             data-testid="center-tab-model"
-             class="ml-auto h-6 shrink-0 rounded px-2 text-xs sticky"
-             :class="centerTab === 'model' ? 'bg-accent font-semibold' : 'text-muted-foreground'"
-             title="模型配置在最右 Tab"
-             @click="switchCenterTab('model')"
-           >
-             模型配置{{ modelKeyDot }}{{ connProfile.profile.apiKeyState === 'set' ? '已设' : '未设' }}
-           </button>
-         </div>
-         <div v-show="centerTab === 'prompt'" class="flex min-h-0 flex-1 flex-col overflow-hidden">
-           <BatchFactory ref="batchFactoryRef" @switch-to-image="switchCenterTab('image')" />
-         </div>
-         <!-- 生图面板按需挂载：默认停留在 prompt，不预 mount，首屏更快；切 Tab 时 initQueue 回填 -->
-         <div v-if="centerTab === 'image'" class="flex min-h-0 flex-1 flex-col overflow-hidden">
-           <ImageQueuePanel @switch-to-prompt="switchCenterTab('prompt')" @switch-to-model="switchCenterTab('model')" />
-         </div>
-         <!-- 需求4 单发面板按需挂载：内存预览不进 Pinia，切 Tab 未保存即丢弃 -->
-         <div v-if="centerTab === 'single'" class="flex min-h-0 flex-1 flex-col overflow-hidden">
-           <SingleShotPanel @switch-to-model="switchCenterTab('model')" />
-         </div>
-         <!-- need02 模型配置面板按需挂载：唯一可写面，切换不丢草稿由 switchCenterTab 守卫 -->
-        <div v-if="centerTab === 'model'" class="flex min-h-0 flex-1 flex-col overflow-hidden">
-          <ModelConfigPanel ref="modelPanelRef" />
+        <div
+          data-testid="sash-left"
+          class="flex w-2 shrink-0 items-center justify-center bg-border hover:bg-primary/20 cursor-col-resize select-none"
+          :class="dragging === 'left' ? 'bg-primary/30' : ''"
+          title="拖拽调整 左右比例"
+          @pointerdown="onSashPointerDown($event, 'left')"
+        >
+          <div class="h-8 w-0.5 rounded bg-muted-foreground/30" />
         </div>
-        <!-- need02-02 图片解析面板按需挂载：解析对象是任意外部文件，与队列正交；关闭 Tab 即释放预览 -->
-         <div v-if="centerTab === 'meta'" class="flex min-h-0 flex-1 flex-col overflow-hidden">
-           <ImageMetaPanel />
-         </div>
-      </section>
 
-      <div
-        data-testid="sash-right"
-        class="flex w-2 shrink-0 items-center justify-center bg-border hover:bg-primary/20 cursor-col-resize select-none"
-        :class="dragging === 'right' ? 'bg-primary/30' : ''"
-        title="拖拽调整 中/右比例"
-        @pointerdown="onSashPointerDown($event, 'right')"
-      >
-        <div class="h-8 w-0.5 rounded bg-muted-foreground/30" />
+        <section
+          data-testid="panel-center"
+          class="flex min-h-0 shrink-0 flex-col overflow-hidden bg-background"
+          :style="{ width: centerPct }"
+        >
+          <el-tabs v-model="centerTab" class="min-h-0 flex-1 flex-col" @tab-change="switchCenterTab($event as typeof centerTab)">
+            <el-tab-pane name="prompt" :lazy="false">
+              <template #label><span data-testid="center-tab-prompt" @click.stop="switchCenterTab('prompt')">Prompt 批量</span></template>
+              <div class="flex min-h-0 flex-1 flex-col overflow-hidden">
+                <BatchFactory ref="batchFactoryRef" @switch-to-image="switchCenterTab('image')" />
+              </div>
+            </el-tab-pane>
+            <el-tab-pane name="image" :lazy="false">
+              <template #label><span data-testid="center-tab-image" @click.stop="switchCenterTab('image')">生图队列</span></template>
+              <div class="flex min-h-0 flex-1 flex-col overflow-hidden">
+                <ImageQueuePanel @switch-to-prompt="switchCenterTab('prompt')" @switch-to-model="switchCenterTab('model')" />
+              </div>
+            </el-tab-pane>
+            <el-tab-pane name="single" :lazy="false">
+              <template #label><span data-testid="center-tab-single" @click.stop="switchCenterTab('single')">手动单发</span></template>
+              <div class="flex min-h-0 flex-1 flex-col overflow-hidden">
+                <SingleShotPanel @switch-to-model="switchCenterTab('model')" />
+              </div>
+            </el-tab-pane>
+            <el-tab-pane name="meta" :lazy="false">
+              <template #label><span data-testid="center-tab-meta" @click.stop="switchCenterTab('meta')">图片解析</span></template>
+              <div class="flex min-h-0 flex-1 flex-col overflow-hidden">
+                <ImageMetaPanel />
+              </div>
+            </el-tab-pane>
+            <el-tab-pane name="model" :lazy="false">
+              <template #label><span data-testid="center-tab-model" @click.stop="switchCenterTab('model')">模型配置{{ modelKeyDot }}{{ connProfile.profile.apiKeyState === 'set' ? '已设' : '未设' }}</span></template>
+              <div class="flex min-h-0 flex-1 flex-col overflow-hidden">
+                <ModelConfigPanel ref="modelPanelRef" />
+              </div>
+            </el-tab-pane>
+          </el-tabs>
+        </section>
+
+        <div
+          data-testid="sash-right"
+          class="flex w-2 shrink-0 items-center justify-center bg-border hover:bg-primary/20 cursor-col-resize select-none"
+          :class="dragging === 'right' ? 'bg-primary/30' : ''"
+          title="拖拽调整 中/右比例"
+          @pointerdown="onSashPointerDown($event, 'right')"
+        >
+          <div class="h-8 w-0.5 rounded bg-muted-foreground/30" />
+        </div>
+
+        <section
+          data-testid="panel-right"
+          class="flex min-h-0 flex-1 flex-col overflow-hidden bg-card"
+        >
+          <HistoryPanel />
+        </section>
       </div>
 
-      <section
-        data-testid="panel-right"
-        class="flex min-h-0 flex-1 flex-col overflow-hidden bg-card"
-      >
-        <HistoryPanel />
-      </section>
+      <StatusBar :dim-count="dimCount" :module-count="moduleCount" @toggle-library="toggleLibrary" @toggle-segment-import="toggleSegmentImport" @toggle-db-manager="showDbManager = true" />
+
+      <BusinessDbOnboardingDialog :open="dbRegistry.onboardingOpen" @update:open="dbRegistry.onboardingOpen = $event" />
+      <DbManagerDrawer :open="showDbManager" @update:open="showDbManager = $event" />
+
+      <LibraryDialog
+        v-if="showLibraryDialog"
+        @close="showLibraryDialog = false"
+        @imported="refreshStats"
+      />
+
+      <SegmentImportDialog
+        v-if="showSegmentImport"
+        :open="showSegmentImport"
+        @update:open="showSegmentImport = $event"
+        @imported="refreshStats"
+      />
+
+      <ImageTaskDetailDialog />
+      <StatsReportDialog />
     </div>
-
-    <StatusBar :dim-count="dimCount" :module-count="moduleCount" @toggle-library="toggleLibrary" @toggle-segment-import="toggleSegmentImport" @toggle-db-manager="showDbManager = true" />
-
-    <BusinessDbOnboardingDialog :open="dbRegistry.onboardingOpen" @update:open="dbRegistry.onboardingOpen = $event" />
-    <DbManagerDrawer :open="showDbManager" @update:open="showDbManager = $event" />
-
-    <LibraryDialog
-      v-if="showLibraryDialog"
-      @close="showLibraryDialog = false"
-      @imported="refreshStats"
-    />
-
-    <SegmentImportDialog
-      v-if="showSegmentImport"
-      :open="showSegmentImport"
-      @update:open="showSegmentImport = $event"
-      @imported="refreshStats"
-    />
-
-    <div data-testid="toasts" class="pointer-events-none fixed bottom-10 right-4 z-50 flex flex-col gap-2">
-      <div
-        v-for="t in appToasts.slice(-5)"
-        :key="t.id"
-        :data-testid="`toast-${t.id}`"
-        class="pointer-events-auto rounded-md border bg-card px-3 py-2 text-sm shadow-lg"
-        :class="t.type === 'success' ? 'border-green-500/30 bg-green-50 dark:bg-green-950' : t.type === 'warning' ? 'border-amber-500/30 bg-amber-50 dark:bg-amber-950' : t.type === 'error' ? 'border-red-500/30 bg-red-50 dark:bg-red-950' : ''"
-      >
-        {{ t.message }}
-      </div>
-    </div>
-
-     <!-- 生图任务详情顶层 Dialog（need06）：Teleport 到 body，免虚拟化 transform 裁剪 -->
-     <ImageTaskDetailDialog />
-     <!-- need01 需求3：报表浮层（运行条 + StatusBar 双入口共用同一 Dialog） -->
-     <StatsReportDialog />
-   </div>
+  </el-config-provider>
 </template>

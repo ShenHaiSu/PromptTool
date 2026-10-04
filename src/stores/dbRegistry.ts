@@ -17,13 +17,20 @@ import {
 } from '@/lib/db'
 import { useAssemblyStore } from '@/stores/assembly'
 import { emit, LIBRARY_CHANGED } from '@/lib/libraryEvents'
+import { logger } from '@/lib/logger'
 
 export type { RegistryRow, ActiveInfo }
 
+/** 事件广播失败不得中断库切换主流程，但必须留痕（06 §3）。 */
+/** 库变更事件广播：emit 内部已隔离单个 handler 异常，不再需要调用侧 try（06 §3）。 */
+function safeEmit(payload: unknown): void {
+  emit(LIBRARY_CHANGED, payload)
+}
+
 export const useDbRegistryStore = defineStore('dbRegistry', () => {
+  const loading = ref(false)
   const activeInfo = ref<ActiveInfo | null>(null)
   const list = ref<RegistryRow[]>([])
-  const loading = ref(false)
   const onboardingOpen = ref(false)
 
   async function fetchActiveInfo(): Promise<void> {
@@ -49,12 +56,12 @@ export const useDbRegistryStore = defineStore('dbRegistry', () => {
     if (payload.selectedItemIds.length > 0) {
       try {
         await dbSetTempCarry(payload)
-      } catch {
-        // ignore
+      } catch (e) {
+        logger.warn('dbRegistry', '暂存选中项失败（切库后不影响主流程）：', e)
       }
     }
     await dbSwitchActive(path)
-    try { emit(LIBRARY_CHANGED, { source: 'dbRegistry', op: 'switchActive', path }) } catch { /* ignore */ }
+    safeEmit({ source: 'dbRegistry', op: 'switchActive', path })
     window.location.reload()
   }
 
@@ -76,10 +83,12 @@ export const useDbRegistryStore = defineStore('dbRegistry', () => {
     if (payload.selectedItemIds.length > 0) {
       try {
         await dbSetTempCarry(payload)
-      } catch {}
+      } catch (e) {
+        logger.warn('dbRegistry', '暂存选中项失败（新建库不影响主流程）：', e)
+      }
     }
     await dbCreateBusiness(args)
-    try { emit(LIBRARY_CHANGED, { source: 'dbRegistry', op: 'createBusiness', path: args.path }) } catch { /* ignore */ }
+    safeEmit({ source: 'dbRegistry', op: 'createBusiness', path: args.path })
     window.location.reload()
   }
 
@@ -87,20 +96,20 @@ export const useDbRegistryStore = defineStore('dbRegistry', () => {
     await dbRepairPath(oldPath, newPath)
     await fetchList()
     await fetchActiveInfo()
-    try { emit(LIBRARY_CHANGED, { source: 'dbRegistry', op: 'repairPath' }) } catch { /* ignore */ }
+    safeEmit({ source: 'dbRegistry', op: 'repairPath' })
   }
 
   async function rebuildMissing(path: string, withSeed: boolean): Promise<void> {
     await dbRebuildMissing(path, withSeed)
     await fetchList()
     await fetchActiveInfo()
-    try { emit(LIBRARY_CHANGED, { source: 'dbRegistry', op: 'rebuildMissing', path }) } catch { /* ignore */ }
+    safeEmit({ source: 'dbRegistry', op: 'rebuildMissing', path })
   }
 
   async function removeRegistry(path: string): Promise<{ wasForeground: boolean; nextForeground: string | null }> {
     const res = await dbRemoveRegistry(path)
     if (res.wasForeground) {
-      try { emit(LIBRARY_CHANGED, { source: 'dbRegistry', op: 'removeRegistry', path }) } catch { /* ignore */ }
+      safeEmit({ source: 'dbRegistry', op: 'removeRegistry', path })
       window.location.reload()
     } else {
       await fetchList()

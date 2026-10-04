@@ -1,12 +1,15 @@
 import { defineStore } from 'pinia'
 import { ref, watch } from 'vue'
 
+import { logger } from '@/lib/logger'
+
 const STORAGE_EXPANDED = 'pmf:expandedKeys'
 
 function safeGet(key: string): string | null {
   try {
     return localStorage.getItem(key)
-  } catch {
+  } catch (e) {
+    logger.warn('dimensionPanel', `读取 ${key} 失败：`, e)
     return null
   }
 }
@@ -14,8 +17,9 @@ function safeGet(key: string): string | null {
 function safeSet(key: string, value: string): void {
   try {
     localStorage.setItem(key, value)
-  } catch {
+  } catch (e) {
     /* quota / disabled */
+    logger.warn('dimensionPanel', `写入 ${key} 失败（quota/disabled）：`, e)
   }
 }
 
@@ -27,8 +31,9 @@ function loadExpandedKeys(): Set<string> {
     if (Array.isArray(arr)) {
       return new Set(arr.filter((v): v is string => typeof v === 'string' && v.length > 0))
     }
-  } catch {
+  } catch (e) {
     /* ignore */
+    logger.warn('dimensionPanel', '解析展开键持久化失败：', e)
   }
   return new Set()
 }
@@ -66,8 +71,9 @@ export const useDimensionPanelStore = defineStore('dimensionPanel', () => {
     () => {
       try {
         safeSet(STORAGE_EXPANDED, JSON.stringify([...expandedKeys.value]))
-      } catch {
+      } catch (e) {
         /* ignore */
+        logger.warn('dimensionPanel', '持久化展开键失败：', e)
       }
     },
   )

@@ -5,6 +5,7 @@
  */
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
+import { logger } from '@/lib/logger'
 import {
   DEFAULT_CONNECTION_PROFILE,
   DEFAULT_MODEL,
@@ -17,12 +18,11 @@ import {
 } from '@/lib/connectionProfile'
 import { modelGet, modelSet, type ModelConfigView } from '@/lib/imageQueueApi'
 import { IQ_DEFAULT_CONFIG, IQ_KEY_SET_PLACEHOLDER } from '@/lib/imageQueue'
-import { useToast } from '@/composables/useToast'
+import { notify } from '@/lib/notify'
 
 export type { ModelProfile }
 
 export const useConnectionProfileStore = defineStore('connectionProfile', () => {
-  const { push } = useToast()
   const profile = ref<ConnectionProfile>({ ...DEFAULT_CONNECTION_PROFILE })
   const loaded = ref(false)
   const keyTouched = ref(false)
@@ -47,13 +47,17 @@ export const useConnectionProfileStore = defineStore('connectionProfile', () => 
           proxyUrl: '',
         }
       }
-    } catch { /* ignore */ }
+    } catch (e) {
+      logger.warn('connectionProfile', '读取本地缓存失败（沿用默认配置）：', e)
+    }
   }
 
   function persistLocalCache(): void {
     try {
       localStorage.setItem(CONNECTION_LOCAL_CACHE_KEY, JSON.stringify(toConnectionLocalCache(profile.value)))
-    } catch { /* ignore */ }
+    } catch (e) {
+      logger.warn('connectionProfile', '写入本地缓存失败：', e)
+    }
   }
 
   /** 后端模型视图 → 前端 profile（占位转 set 态，原文置空等待重输）。 */
@@ -91,7 +95,9 @@ export const useConnectionProfileStore = defineStore('connectionProfile', () => 
         const view = await iqGetConfig()
         const full = viewToConfig(view)
         profile.value = connectionFromIqConfig({ ...IQ_DEFAULT_CONFIG, ...full })
-      } catch { /* 保留缓存/默认值 */ }
+      } catch (e) {
+        logger.warn('connectionProfile', '回落 iq 配置读取失败（保留缓存/默认值）：', e)
+      }
     }
     keyTouched.value = false
     proxyTouched.value = false
@@ -116,7 +122,7 @@ export const useConnectionProfileStore = defineStore('connectionProfile', () => 
   async function saveConnection(): Promise<boolean> {
     const errs = validateConnectionProfile(profile.value)
     if (errs.length) {
-      push(errs[0]!, 'warning')
+      notify(errs[0]!, 'warning')
       return false
     }
     try {
@@ -136,10 +142,10 @@ export const useConnectionProfileStore = defineStore('connectionProfile', () => 
       keyTouched.value = false
       proxyTouched.value = false
       persistLocalCache()
-      push('模型配置已保存', 'success', 1500)
+      notify('模型配置已保存', 'success', 1500)
       return true
     } catch (err) {
-      push(`保存失败：${err instanceof Error ? err.message : String(err)}`, 'error')
+      notify(`保存失败：${err instanceof Error ? err.message : String(err)}`, 'error')
       return false
     }
   }

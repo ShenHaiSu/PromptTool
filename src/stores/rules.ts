@@ -5,6 +5,7 @@
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
 import { dbListRules, dbCreateRule, dbUpdateRule, dbDeleteRule, dbToggleRule } from '@/lib/db'
+import { logger } from '@/lib/logger'
 import type { RuleDto, RuleUpsertPayload } from '@/lib/db'
 import type { Rule, EngineRule } from '@/engine/ruleTypes'
 import { LEGACY_DEFAULT_RULES } from '@/engine/ruleEngine'
@@ -40,7 +41,9 @@ export const useRulesStore = defineStore('rules', () => {
     try {
       const library = useLibraryStore()
       for (const d of library.dimensions) map[d.id] = d.key
-    } catch { /* pinia 外单测降级 */ }
+    } catch (e) {
+      logger.warn('rules', '维度映射构建失败（pinia 外单测降级）：', e)
+    }
     return map
   })
 
@@ -49,7 +52,9 @@ export const useRulesStore = defineStore('rules', () => {
     try {
       const library = useLibraryStore()
       for (const d of library.dimensions) map[d.key] = d.nameCn || d.key
-    } catch { /* ignore */ }
+    } catch (e) {
+      logger.warn('rules', '维度名映射构建失败：', e)
+    }
     return map
   })
 
