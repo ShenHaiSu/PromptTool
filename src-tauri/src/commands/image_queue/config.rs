@@ -10,7 +10,10 @@
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
-use super::agnes::{mask_secret, SUPPORTED_PROTOCOLS, SUPPORTED_RATIOS, SUPPORTED_SIZES};
+use super::agnes::{
+    mask_secret, validate_model, DEFAULT_MODEL, SUPPORTED_PROTOCOLS, SUPPORTED_RATIOS,
+    SUPPORTED_SIZES,
+};
 
 /// API 基址默认（Agnes Hub）。
 pub const DEFAULT_API_BASE: &str = "https://apihub.agnes-ai.com";
@@ -24,6 +27,10 @@ const OBFUSCATE_SALT: &[u8] = b"pmf-image-queue-v1::agnes";
 pub struct ImageQueueConfig {
     /// "agnes"（白名单，一期唯一）。
     pub protocol: String,
+    /// 模型名（need02 过渡期双写：SSOT 在 connection.json，此处为只读镜像；B4 后删除）。
+    /// 缺字段即默认 `agnes-image-2.5-flash`。
+    #[serde(default = "default_model")]
+    pub model: String,
     pub loop_enabled: bool,
     /// 开始生图前自动随机一批新提示词入队（旧 `loop_after_random` 已删除；旧配置残留字段自动忽略）。
     #[serde(default)]
@@ -74,10 +81,16 @@ fn default_total_timeout_secs() -> u64 {
     300
 }
 
+/// need02 模型 SSOT 默认（与 `agnes::DEFAULT_MODEL` 同源；`connection.json` 缺字段回填此值）。
+fn default_model() -> String {
+    DEFAULT_MODEL.to_string()
+}
+
 impl Default for ImageQueueConfig {
     fn default() -> Self {
         Self {
             protocol: "agnes".to_string(),
+            model: default_model(),
             loop_enabled: false,
             auto_random_on_start: false,
             loop_use_partial: false,
@@ -105,6 +118,9 @@ impl Default for ImageQueueConfig {
 #[serde(rename_all = "camelCase")]
 pub struct ImageQueueConfigView {
     pub protocol: String,
+    /// need02 过渡期只读镜像（SSOT 在 connection.json；`iq_set_config` 忽略此字段）。
+    #[serde(default = "default_model")]
+    pub model: String,
     pub loop_enabled: bool,
     pub auto_random_on_start: bool,
     #[serde(default)]
@@ -132,6 +148,11 @@ impl ImageQueueConfig {
     pub fn view(&self) -> ImageQueueConfigView {
         ImageQueueConfigView {
             protocol: self.protocol.clone(),
+            model: if self.model.trim().is_empty() {
+                default_model()
+            } else {
+                self.model.clone()
+            },
             loop_enabled: self.loop_enabled,
             auto_random_on_start: self.auto_random_on_start,
             loop_use_partial: self.loop_use_partial,
@@ -170,6 +191,12 @@ impl ImageQueueConfig {
         if !SUPPORTED_PROTOCOLS.contains(&self.protocol.as_str()) {
             return Err(format!("不支持的协议：{}（一期仅支持 agnes）", self.protocol));
         }
+        // need02：模型走白名单（空即默认；非法直接拒绝，不回落）。
+        self.model = validate_model(if self.model.trim().is_empty() {
+            DEFAULT_MODEL
+        } else {
+            &self.model
+        })?;
         let base = self.api_base.trim().trim_end_matches('/').to_string();
         if !(base.starts_with("http://") || base.starts_with("https://")) {
             return Err("API 路径必须以 http(s):// 开头".to_string());
@@ -205,6 +232,8 @@ impl ImageQueueConfig {
      /// need01-02B 连接快照：单发预览/保存命令改读此快照（client 指纹同理），队列规则字段不进入快照。
      pub fn connection_snapshot(&self) -> ConnectionSnapshot {
          ConnectionSnapshot {
+             protocol: self.protocol.clone(),
+             model: if self.model.trim().is_empty() { default_model() } else { self.model.clone() },
              api_base: self.api_base.clone(),
              api_key: self.api_key.clone(),
              proxy_on: self.proxy_on,
@@ -218,6 +247,8 @@ impl ImageQueueConfig {
  /// 连接快照（内存态，不落盘）：`iq_generate_one_preview / iq_save_preview` 改读此快照。
  #[derive(Debug, Clone)]
  pub struct ConnectionSnapshot {
+     pub protocol: String,
+     pub model: String,
      pub api_base: String,
      pub api_key: String,
      pub proxy_on: bool,
@@ -298,11 +329,14 @@ fn atomic_write(path: &Path, bytes: &[u8]) -> Result<(), String> {
  }
  
  /// 连接独立文件（非敏感子集，缺字段即默认，参考 validate 兼容写法）。
- #[derive(Debug, Clone, Serialize, Deserialize, Default)]
+ #[derive(Debug, Clone, Serialize, Deserialize)]
  #[serde(rename_all = "camelCase")]
  pub struct ConnectionFile {
      #[serde(default = "default_protocol")]
      pub protocol: String,
+     /// need02 模型 SSOT 唯一写点归属：缺字段即默认回填 + 补写文件（幂等）。
+     #[serde(default = "default_model")]
+     pub model: String,
      #[serde(default = "default_api_base")]
      pub api_base: String,
      #[serde(default)]
@@ -320,11 +354,27 @@ fn atomic_write(path: &Path, bytes: &[u8]) -> Result<(), String> {
  fn default_protocol() -> String { "agnes".to_string() }
  fn default_api_base() -> String { DEFAULT_API_BASE.to_string() }
  fn default_true_fn() -> bool { true }
- 
+
+ impl Default for ConnectionFile {
+     fn default() -> Self {
+         Self {
+             protocol: default_protocol(),
+             model: default_model(),
+             api_base: default_api_base(),
+             proxy_on: false,
+             proxy_url: String::new(),
+             remember_key: default_true_fn(),
+             connect_timeout_secs: default_connect_timeout_secs(),
+             total_timeout_secs: default_total_timeout_secs(),
+         }
+     }
+ }
+
  impl ConnectionFile {
      pub fn from_config(cfg: &ImageQueueConfig) -> Self {
          Self {
              protocol: cfg.protocol.clone(),
+             model: if cfg.model.trim().is_empty() { default_model() } else { cfg.model.clone() },
              api_base: cfg.api_base.clone(),
              proxy_on: cfg.proxy_on,
              proxy_url: String::new(),
@@ -335,6 +385,7 @@ fn atomic_write(path: &Path, bytes: &[u8]) -> Result<(), String> {
      }
      pub fn apply_to(&self, cfg: &mut ImageQueueConfig) {
          cfg.protocol = self.protocol.clone();
+         cfg.model = if self.model.trim().is_empty() { default_model() } else { self.model.clone() };
          cfg.api_base = self.api_base.clone();
          cfg.proxy_on = self.proxy_on;
          cfg.remember_key = self.remember_key;
@@ -359,7 +410,14 @@ fn atomic_write(path: &Path, bytes: &[u8]) -> Result<(), String> {
      };
      if conn_path.exists() {
          if let Ok(raw) = std::fs::read_to_string(&conn_path) {
-             if let Ok(conn) = serde_json::from_str::<ConnectionFile>(&raw) {
+             if let Ok(mut conn) = serde_json::from_str::<ConnectionFile>(&raw) {
+                 // need02：缺 model 即默认回填 + 补写文件（幂等，失败不阻断启动）。
+                 if conn.model.trim().is_empty() {
+                     conn.model = default_model();
+                     if let Ok(conn_json) = serde_json::to_string_pretty(&conn) {
+                         let _ = atomic_write(&conn_path, conn_json.as_bytes());
+                     }
+                 }
                  conn.apply_to(&mut cfg);
              }
          }
@@ -409,10 +467,12 @@ pub fn delete_secrets(data_dir: &Path) {
     let _ = std::fs::remove_file(secrets_file_path(data_dir));
 }
 
-/// HTTP client 指纹：`(api_base, proxy_on, proxy_url, timeout)` 一致则复用。
+/// HTTP client 指纹：`(api_base, proxy_on, proxy_url, timeout, model)` 一致则复用。
+/// need02：换模型即换 client，不污染旧连接复用。
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
 pub struct ClientFingerprint {
     pub api_base: String,
+    pub model: String,
     pub proxy_on: bool,
     pub proxy_url: String,
     pub connect_secs: u64,
@@ -423,10 +483,23 @@ impl ClientFingerprint {
     pub fn of(cfg: &ImageQueueConfig) -> Self {
         Self {
             api_base: cfg.api_base.clone(),
+            model: if cfg.model.trim().is_empty() { default_model() } else { cfg.model.clone() },
             proxy_on: cfg.proxy_on,
             proxy_url: if cfg.proxy_on { cfg.proxy_url.clone() } else { String::new() },
             connect_secs: cfg.connect_timeout_secs,
             total_secs: cfg.total_timeout_secs,
+        }
+    }
+
+    /// need02：模型快照直构指纹（队列 worker / 单发 / model_test 共用同一换 client 语义）。
+    pub fn of_snapshot(snap: &ConnectionSnapshot) -> Self {
+        Self {
+            api_base: snap.api_base.clone(),
+            model: if snap.model.trim().is_empty() { default_model() } else { snap.model.clone() },
+            proxy_on: snap.proxy_on,
+            proxy_url: if snap.proxy_on { snap.proxy_url.clone() } else { String::new() },
+            connect_secs: snap.connect_secs,
+            total_secs: snap.total_secs,
         }
     }
 }
@@ -442,6 +515,113 @@ pub fn build_client(fp: &ClientFingerprint) -> Result<reqwest::Client, String> {
         builder = builder.proxy(proxy);
     }
     builder.build().map_err(|e| format!("HTTP client 构造失败：{}", e))
+}
+
+// ------------------------------------------------------------------
+// need02 模型 SSOT 视图与纯函数（`model_*` 三命令 + `queue.rs` 命令层共用；
+// 命令层只做锁/落盘编排，校验与占位语义全部在此）
+// ------------------------------------------------------------------
+
+/// 模型配置视图（唯一可写面的 DTO）：`apiKey/proxyUrl` 占位语义与 `ImageQueueConfigView` 一致，
+/// 明文永不经此视图外泄；队列规则字段不在此出现。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModelConfigView {
+    pub protocol: String,
+    #[serde(default = "default_model")]
+    pub model: String,
+    pub api_base: String,
+    pub api_key: String,
+    #[serde(default)]
+    pub api_key_masked: String,
+    pub proxy_on: bool,
+    pub proxy_url: String,
+    pub remember_key: bool,
+    pub connect_timeout_secs: u64,
+    pub total_timeout_secs: u64,
+}
+
+/// 空即默认（队列 worker / 单发 / 内嵌 meta 统一经此读模型，防空串进请求体）。
+pub fn model_or_default(cfg: &ImageQueueConfig) -> String {
+    if cfg.model.trim().is_empty() {
+        default_model()
+    } else {
+        cfg.model.clone()
+    }
+}
+
+/// 内存配置 → 模型视图（占位/脱敏语义与 `ImageQueueConfig::view` 一致）。
+pub fn model_view_of(cfg: &ImageQueueConfig) -> ModelConfigView {
+    ModelConfigView {
+        protocol: cfg.protocol.clone(),
+        model: model_or_default(cfg),
+        api_base: cfg.api_base.clone(),
+        api_key: if cfg.api_key.is_empty() {
+            String::new()
+        } else {
+            KEY_SET_PLACEHOLDER.to_string()
+        },
+        api_key_masked: if cfg.api_key.is_empty() {
+            String::new()
+        } else {
+            mask_secret(&cfg.api_key)
+        },
+        proxy_on: cfg.proxy_on,
+        proxy_url: if cfg.proxy_url.is_empty() {
+            String::new()
+        } else {
+            KEY_SET_PLACEHOLDER.to_string()
+        },
+        remember_key: cfg.remember_key,
+        connect_timeout_secs: cfg.connect_timeout_secs,
+        total_timeout_secs: cfg.total_timeout_secs,
+    }
+}
+
+impl ModelConfigView {
+    /// 校验 + 钳制（`model_set` 入口调用；调用方须先把 `__SET__` 解析为真值再调）。
+    pub fn validate_and_normalize(&mut self) -> Result<(), String> {
+        if !SUPPORTED_PROTOCOLS.contains(&self.protocol.as_str()) {
+            return Err(format!("不支持的协议：{}（一期仅支持 agnes）", self.protocol));
+        }
+        let m = if self.model.trim().is_empty() {
+            DEFAULT_MODEL.to_string()
+        } else {
+            self.model.trim().to_string()
+        };
+        self.model = validate_model(&m)?;
+        let base = self.api_base.trim().trim_end_matches('/').to_string();
+        if !(base.starts_with("http://") || base.starts_with("https://")) {
+            return Err("API 路径必须以 http(s):// 开头".to_string());
+        }
+        self.api_base = base;
+        if self.proxy_on {
+            let u = self.proxy_url.trim().to_string();
+            if u.starts_with("socks5://") || u.starts_with("socks5h://") {
+                return Err("socks5 代理为二期支持，一期仅支持 http(s)://".to_string());
+            }
+            if !(u.starts_with("http://") || u.starts_with("https://")) {
+                return Err("代理地址必须以 http(s):// 开头".to_string());
+            }
+            self.proxy_url = u;
+        }
+        self.connect_timeout_secs = self.connect_timeout_secs.clamp(5, 60);
+        self.total_timeout_secs = self.total_timeout_secs.clamp(60, 600);
+        Ok(())
+    }
+}
+
+/// 模型视图回填内存配置（仅模型 8 项 + key；队列规则字段不动）。
+pub fn apply_model_view(cfg: &mut ImageQueueConfig, v: &ModelConfigView) {
+    cfg.protocol = v.protocol.clone();
+    cfg.model = v.model.clone();
+    cfg.api_base = v.api_base.clone();
+    cfg.api_key = v.api_key.clone();
+    cfg.proxy_on = v.proxy_on;
+    cfg.proxy_url = v.proxy_url.clone();
+    cfg.remember_key = v.remember_key;
+    cfg.connect_timeout_secs = v.connect_timeout_secs;
+    cfg.total_timeout_secs = v.total_timeout_secs;
 }
 
 #[cfg(test)]
@@ -735,6 +915,126 @@ mod tests {
          // 快照仅连接字段
          let snap = back.connection_snapshot();
          assert_eq!(snap.api_base, "https://old.example.com");
+         let _ = std::fs::remove_dir_all(&dir);
+     }
+
+     #[test]
+     fn default_model_is_pinned_whitelist_value() {
+         // need02 B1：默认模型即白名单唯一值
+         let c = ImageQueueConfig::default();
+         assert_eq!(c.model, "agnes-image-2.5-flash");
+         assert_eq!(default_model(), "agnes-image-2.5-flash");
+         let conn = ConnectionFile::default();
+         assert_eq!(conn.model, "agnes-image-2.5-flash");
+     }
+
+     #[test]
+     fn legacy_payload_missing_model_defaults() {
+         // need02 B1：旧 image_queue.json / 旧前端 payload 无 model 字段 → 默认回填
+         let raw = serde_json::json!({
+             "protocol": "agnes",
+             "loopEnabled": false,
+             "apiBase": DEFAULT_API_BASE,
+             "outputDir": "",
+             "size": "1K",
+             "ratio": "1:1",
+             "concurrency": 2,
+             "proxyOn": false,
+             "proxyUrl": "",
+             "rememberKey": true,
+             "connectTimeoutSecs": 15,
+             "totalTimeoutSecs": 300
+         });
+         let cfg: ImageQueueConfig = serde_json::from_value(raw).expect("旧配置应兼容 model 默认值");
+         assert_eq!(cfg.model, "agnes-image-2.5-flash");
+         assert_eq!(cfg.view().model, "agnes-image-2.5-flash");
+         // 旧 connection.json 同理
+         let conn_raw = serde_json::json!({ "protocol": "agnes", "apiBase": DEFAULT_API_BASE });
+         let conn: ConnectionFile = serde_json::from_value(conn_raw).expect("旧 connection.json 应兼容 model 默认值");
+         assert_eq!(conn.model, "agnes-image-2.5-flash");
+     }
+
+     #[test]
+     fn validate_rejects_bad_model() {
+         // need02 B2：非法 model 前后端一致拒绝（中文 Err）
+         let mut c = ImageQueueConfig::default();
+         c.model = "gpt-4".into();
+         let err = c.validate_and_normalize().unwrap_err();
+         assert!(err.contains("不支持的模型"), "实际：{}", err);
+         let mut v = model_view_of(&ImageQueueConfig::default());
+         v.model = "  ".into();
+         v.validate_and_normalize().unwrap();
+         assert_eq!(v.model, "agnes-image-2.5-flash");
+         let mut v2 = model_view_of(&ImageQueueConfig::default());
+         v2.model = "evil-model".into();
+         assert!(v2.validate_and_normalize().is_err());
+     }
+
+     #[test]
+     fn model_view_masks_key_and_serializes_no_plaintext() {
+         // need02 B2：ModelConfigView 占位/脱敏语义与 iq view 一致，明文永不外泄
+         let mut c = ImageQueueConfig::default();
+         c.api_key = "sk-secret-abcdef123456".into();
+         let v = model_view_of(&c);
+         assert_eq!(v.model, "agnes-image-2.5-flash");
+         assert_eq!(v.api_key, "__SET__");
+         assert!(!v.api_key_masked.is_empty());
+         let json = serde_json::to_string(&v).unwrap();
+         assert!(!json.contains("sk-secret-abcdef123456"));
+     }
+
+     #[test]
+     fn model_or_default_falls_back_on_blank() {
+         let mut c = ImageQueueConfig::default();
+         c.model = "   ".into();
+         assert_eq!(model_or_default(&c), "agnes-image-2.5-flash");
+     }
+
+     #[test]
+     fn apply_model_view_only_touches_model_fields() {
+         // need02 B2：回填仅动模型 8 项 + key，队列规则不动
+         let mut c = ImageQueueConfig::default();
+         c.size = "4K".into();
+         c.concurrency = 7;
+         let mut v = model_view_of(&c);
+         v.api_base = "https://new.example.com".into();
+         v.model = "agnes-image-2.5-flash".into();
+         v.connect_timeout_secs = 30;
+         apply_model_view(&mut c, &v);
+         assert_eq!(c.api_base, "https://new.example.com");
+         assert_eq!(c.model, "agnes-image-2.5-flash");
+         assert_eq!(c.connect_timeout_secs, 30);
+         assert_eq!(c.size, "4K");
+         assert_eq!(c.concurrency, 7);
+     }
+
+     #[test]
+     fn fingerprint_includes_model() {
+         // need02 B2：换模型即换 client 指纹
+         let a = ImageQueueConfig::default();
+         let fp_a = ClientFingerprint::of(&a);
+         let mut b = ImageQueueConfig::default();
+         b.model = "agnes-image-2.5-flash".into();
+         assert_eq!(fp_a, ClientFingerprint::of(&b));
+         let snap = a.connection_snapshot();
+         assert_eq!(snap.model, "agnes-image-2.5-flash");
+         assert_eq!(ClientFingerprint::of_snapshot(&snap), fp_a);
+     }
+
+     #[test]
+     fn connection_json_missing_model_backfills_temp_io() {
+         // need02 B1：connection.json 缺 model → 默认回填 + 补写文件（幂等）
+         let dir = std::env::temp_dir().join(format!("pmf_iq_model_{}", uuid::Uuid::new_v4()));
+         std::fs::create_dir_all(&dir).unwrap();
+         let raw = serde_json::json!({ "protocol": "agnes", "apiBase": "https://old.example.com" });
+         std::fs::write(connection_file_path(&dir), serde_json::to_string_pretty(&raw).unwrap()).unwrap();
+         let back = load_config(&dir).unwrap();
+         assert_eq!(back.model, "agnes-image-2.5-flash");
+         let reread: ConnectionFile = serde_json::from_str(
+             &std::fs::read_to_string(connection_file_path(&dir)).unwrap(),
+         )
+         .unwrap();
+         assert_eq!(reread.model, "agnes-image-2.5-flash");
          let _ = std::fs::remove_dir_all(&dir);
      }
  }

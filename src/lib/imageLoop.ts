@@ -188,9 +188,18 @@ export async function prepareStartQueue(opts?: {
   try {
     const iq = useImageQueueStore()
     if (!iq.config.autoRandomOnStart) return { kind: 'direct' }
-    if (iq.config.apiKeyState === 'unset' && !iq.config.apiKey) {
-      push('未设置生图密钥，无法开始', 'warning')
-      return { kind: 'blocked', reason: 'no-key' }
+    try {
+      const { useConnectionProfileStore } = await import('@/stores/connectionProfile')
+      const { isConnectionReady } = await import('@/lib/connectionProfile')
+      if (!isConnectionReady(useConnectionProfileStore().profile)) {
+        push('未设置生图密钥，无法开始（请去右上「模型配置」设置）', 'warning')
+        return { kind: 'blocked', reason: 'no-key' }
+      }
+    } catch {
+      if (iq.config.apiKeyState === 'unset' && !iq.config.apiKey) {
+        push('未设置生图密钥，无法开始', 'warning')
+        return { kind: 'blocked', reason: 'no-key' }
+      }
     }
     const count = Math.min(8, Math.max(1, Math.round(iq.config.concurrency) || 1))
     const batch = useBatchStore()

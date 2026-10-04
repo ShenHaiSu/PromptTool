@@ -6,6 +6,9 @@
 
 export const IQ_PROTOCOLS = [{ value: 'agnes', label: 'Agnes（Image 2.5 Flash）' }] as const
 export type IqProtocol = 'agnes'
+/** need02 模型 SSOT（前端过渡期双写镜像；SSOT 在 connection.json，B4 后队列配置删除此字段）。 */
+export const IQ_DEFAULT_MODEL = 'agnes-image-2.5-flash'
+export const IQ_SUPPORTED_MODELS = ['agnes-image-2.5-flash'] as const
 
 export const IQ_SIZES = ['1K', '2K', '3K', '4K'] as const
 export type IqSize = (typeof IQ_SIZES)[number]
@@ -36,6 +39,8 @@ export type IqProxyUrlState = 'unset' | 'set'
 
  export interface ImageQueueConfig {
   protocol: IqProtocol
+  /** need02 模型过渡期双写镜像（SSOT 在 connection.json；iq_set_config 忽略此字段，B4 后删除）。 */
+  model: string
   loopEnabled: boolean
   /** 开始生图前自动随机一批新提示词入队（数量取并发数）。 */
   autoRandomOnStart: boolean
@@ -70,6 +75,7 @@ export type IqProxyUrlState = 'unset' | 'set'
 
 export const IQ_DEFAULT_CONFIG: ImageQueueConfig = {
   protocol: 'agnes',
+  model: IQ_DEFAULT_MODEL,
   loopEnabled: false,
   autoRandomOnStart: false,
   loopUsePartial: false,
@@ -104,6 +110,7 @@ function isHttpUrl(s: string): boolean {
 export function validateIqConfig(c: ImageQueueConfig): string[] {
   const errs: string[] = []
   if (c.protocol !== 'agnes') errs.push('未知协议，仅支持 agnes')
+  if (!(IQ_SUPPORTED_MODELS as readonly string[]).includes((c as { model?: string }).model ?? IQ_DEFAULT_MODEL)) errs.push('不支持的模型，一期仅支持 ' + IQ_DEFAULT_MODEL + '（请到模型配置页修改）')
   if (!isHttpUrl(c.apiBase)) errs.push('API 路径须以 http(s):// 开头')
   if (!(IQ_SIZES as readonly string[]).includes(c.size)) errs.push(`分辨率非法，仅支持 ${IQ_SIZES.join(' / ')}`)
   if (!(IQ_RATIOS as readonly string[]).includes(c.ratio)) errs.push(`比例非法，仅支持 ${IQ_RATIOS.join(' ')}`)

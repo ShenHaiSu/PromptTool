@@ -6,6 +6,8 @@
 
 /// Agnes 模型名写死，不接受前端传入。
 pub const AGNES_MODEL: &str = "agnes-image-2.5-flash";
+/// 默认模型（connection.json 缺字段回填与指纹回落统一引用它）。
+pub const DEFAULT_MODEL: &str = AGNES_MODEL;
 /// 文生图默认输出格式：走 `extra_body.response_format`（推荐 url，省带宽）。
 pub const AGNES_RESPONSE_FORMAT: &str = "url";
 /// 测试连接探针 prompt（固定句，与 `scripts/probe_agnes.py` 一致）。
@@ -13,6 +15,18 @@ pub const PROBE_PROMPT: &str = "a small glass cube on a white studio background,
 
 /// 支持的协议白名单（一期仅 agnes）。
 pub const SUPPORTED_PROTOCOLS: &[&str] = &["agnes"];
+/// 支持的模型白名单（一期仅 agnes-image-2.5-flash；`build_text_to_image` 必经此白名单参数，无默认回落）。
+pub const SUPPORTED_MODELS: &[&str] = &[AGNES_MODEL];
+
+/// 模型白名单校验：通过返回 trim 后原值，非法返回中文 Err（`model_set` / `validate_and_normalize` / `load` 钳制共用）。
+pub fn validate_model(model: &str) -> Result<String, String> {
+    let m = model.trim().to_string();
+    if SUPPORTED_MODELS.contains(&m.as_str()) {
+        Ok(m)
+    } else {
+        Err(format!("不支持的模型：{}（一期仅支持 {}）", model.trim(), AGNES_MODEL))
+    }
+}
 /// 支持的分辨率档位（只做白名单校验，不映射像素）。
 pub const SUPPORTED_SIZES: &[&str] = &["1K", "2K", "3K", "4K"];
 /// 支持的比例（8 种）。
@@ -43,7 +57,7 @@ impl std::fmt::Display for IqError {
 pub trait ImageProvider: Send + Sync {
     fn name(&self) -> &'static str;
     fn endpoint(&self, api_base: &str) -> String;
-    fn build_text_to_image(&self, prompt: &str, size: &str, ratio: &str) -> serde_json::Value;
+    fn build_text_to_image(&self, model: &str, prompt: &str, size: &str, ratio: &str) -> serde_json::Value;
     fn parse_image_url(&self, body: &serde_json::Value) -> Result<String, String>;
 }
 
@@ -58,9 +72,10 @@ impl ImageProvider for AgnesProvider {
         format!("{}/v1/images/generations", api_base.trim_end_matches('/'))
     }
 
-    fn build_text_to_image(&self, prompt: &str, size: &str, ratio: &str) -> serde_json::Value {
+    fn build_text_to_image(&self, model: &str, prompt: &str, size: &str, ratio: &str) -> serde_json::Value {
+        // model 由调用方经 `validate_model` 白名单校验后传入，此处直接填入，不做默认回落（防双源漂移）。
         serde_json::json!({
-            "model": AGNES_MODEL,
+            "model": model,
             "prompt": prompt,
             "size": size,
             "ratio": ratio,
@@ -176,13 +191,15 @@ pub async fn generate_one(
     client: &reqwest::Client,
     api_base: &str,
     api_key: &str,
+    model: &str,
     prompt: &str,
     size: &str,
     ratio: &str,
 ) -> Result<(String, u128), IqError> {
     let provider = AgnesProvider;
     let url = provider.endpoint(api_base);
-    let body = provider.build_text_to_image(prompt, size, ratio);
+    let model = validate_model(model).map_err(IqError::Fatal)?;
+    let body = provider.build_text_to_image(&model, prompt, size, ratio);
     let started = std::time::Instant::now();
     let backoffs = [std::time::Duration::from_secs(1), std::time::Duration::from_secs(3)];
 
@@ -256,7 +273,7 @@ mod tests {
     #[test]
     fn body_top_level_has_no_response_format() {
         let p = AgnesProvider;
-        let body = p.build_text_to_image("a cat", "1K", "1:1");
+        let body = p.build_text_to_image(AGNES_MODEL, "a cat", "1K", "1:1");
         assert!(body.get("response_format").is_none(), "顶层禁止出现 response_format");
         assert_eq!(
             body.pointer("/extra_body/response_format").and_then(|v| v.as_str()),
@@ -267,15 +284,33 @@ mod tests {
     #[test]
     fn body_model_is_pinned() {
         let p = AgnesProvider;
-        let body = p.build_text_to_image("a cat", "2K", "16:9");
+        let body = p.build_text_to_image(AGNES_MODEL, "a cat", "2K", "16:9");
         assert_eq!(body.get("model").and_then(|v| v.as_str()), Some(AGNES_MODEL));
         assert_eq!(body.get("model").and_then(|v| v.as_str()), Some("agnes-image-2.5-flash"));
     }
 
     #[test]
+    fn body_model_passthrough_param() {
+        // need02：model 由调用方经白名单校验后传入，此处直接填入（无默认回落）。
+        let p = AgnesProvider;
+        let body = p.build_text_to_image("agnes-image-2.5-flash", "a cat", "1K", "1:1");
+        assert_eq!(body.get("model").and_then(|v| v.as_str()), Some("agnes-image-2.5-flash"));
+    }
+
+    #[test]
+    fn validate_model_whitelist() {
+        assert_eq!(validate_model("agnes-image-2.5-flash").unwrap(), "agnes-image-2.5-flash");
+        assert_eq!(validate_model("  agnes-image-2.5-flash  ").unwrap(), "agnes-image-2.5-flash");
+        let err = validate_model("gpt-4").unwrap_err();
+        assert!(err.contains("不支持的模型"), "实际：{}", err);
+        let err2 = validate_model("").unwrap_err();
+        assert!(err2.contains("不支持的模型"), "实际：{}", err2);
+    }
+
+    #[test]
     fn body_has_no_image_field() {
         let p = AgnesProvider;
-        let body = p.build_text_to_image("a cat", "1K", "1:1");
+        let body = p.build_text_to_image(AGNES_MODEL, "a cat", "1K", "1:1");
         assert!(body.get("image").is_none(), "顶层禁止出现 image");
         assert!(
             body.pointer("/extra_body/image").is_none(),
@@ -286,7 +321,7 @@ mod tests {
     #[test]
     fn body_size_ratio_passthrough() {
         let p = AgnesProvider;
-        let body = p.build_text_to_image("a cat", "4K", "21:9");
+        let body = p.build_text_to_image(AGNES_MODEL, "a cat", "4K", "21:9");
         assert_eq!(body.get("size").and_then(|v| v.as_str()), Some("4K"));
         assert_eq!(body.get("ratio").and_then(|v| v.as_str()), Some("21:9"));
     }

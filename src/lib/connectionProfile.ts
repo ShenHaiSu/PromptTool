@@ -1,10 +1,16 @@
- // need01-02B 生图连接配置独立模块（前端连接域）。
- // 连接类字段：protocol/apiBase/apiKey(+State/Masked)/proxyOn/proxyUrl(+State)/rememberKey/connectTimeoutSecs/totalTimeoutSecs
- // 队列规则类保留在 ImageQueueConfig（size/ratio/outputDir/concurrency/loop星/embedMeta），见 src/lib/imageQueue.ts。
+// need01-02B 生图连接配置独立模块（前端连接域）。
+// 连接类字段：protocol/model/apiBase/apiKey(+State/Masked)/proxyOn/proxyUrl(+State)/rememberKey/connectTimeoutSecs/totalTimeoutSecs
+// 队列规则类保留在 ImageQueueConfig（size/ratio/outputDir/concurrency/loop星/embedMeta），见 src/lib/imageQueue.ts。
 import { IQ_DEFAULT_CONFIG, IQ_KEY_SET_PLACEHOLDER, type ImageQueueConfig } from '@/lib/imageQueue'
+
+export const DEFAULT_MODEL = 'agnes-image-2.5-flash'
+export const SUPPORTED_MODELS = ['agnes-image-2.5-flash'] as const
+export type SupportedModel = (typeof SUPPORTED_MODELS)[number]
 
 export interface ConnectionProfile {
   protocol: 'agnes'
+  /** need02 模型 SSOT：白名单一期唯一，缺字段即默认回填。 */
+  model: string
   apiBase: string
   apiKey: string
   apiKeyState: 'unset' | 'set'
@@ -17,8 +23,12 @@ export interface ConnectionProfile {
   totalTimeoutSecs: number
 }
 
+/** need02 渐进改名别名：ModelProfile = ConnectionProfile。 */
+export type ModelProfile = ConnectionProfile
+
 export const DEFAULT_CONNECTION_PROFILE: ConnectionProfile = {
   protocol: 'agnes',
+  model: DEFAULT_MODEL,
   apiBase: IQ_DEFAULT_CONFIG.apiBase,
   apiKey: '',
   apiKeyState: 'unset',
@@ -37,10 +47,19 @@ function isHttpUrl(s: string): boolean {
   return /^https?:\/\/.+/i.test(s.trim())
 }
 
+/** 模型白名单校验（空即默认回填由调用方处理，此处空按非法计，前端下拉防手输）。 */
+export function validateModelName(model: string): string | null {
+  const m = (model ?? '').trim()
+  if ((SUPPORTED_MODELS as readonly string[]).includes(m)) return null
+  return `不支持的模型：${m || '(空)'}（一期仅支持 ${DEFAULT_MODEL}）`
+}
+
 /** 连接子集校验（队列规则不在此验）。 */
 export function validateConnectionProfile(c: ConnectionProfile): string[] {
   const errs: string[] = []
   if (c.protocol !== 'agnes') errs.push('未知协议，仅支持 agnes')
+  const modelErr = validateModelName((c as Partial<ConnectionProfile>).model ?? DEFAULT_MODEL)
+  if (modelErr) errs.push(modelErr)
   if (!isHttpUrl(c.apiBase)) errs.push('API 路径须以 http(s):// 开头')
   if (!Number.isFinite(c.connectTimeoutSecs) || c.connectTimeoutSecs < 5 || c.connectTimeoutSecs > 60) {
     errs.push('连接超时须为 5..60 秒')
@@ -65,7 +84,7 @@ export function isConnectionReady(c: Pick<ConnectionProfile, 'apiKey' | 'apiKeyS
   return c.apiKeyState === 'set' || Boolean(c.apiKey && c.apiKey !== IQ_KEY_SET_PLACEHOLDER)
 }
 
-/** 非敏感子集进 localStorage（apiKey/proxyUrl 明文永不进）。 */
+/** 非敏感子集进 localStorage（apiKey/proxyUrl 明文永不进；model 非敏感可缓存）。 */
 export function toConnectionLocalCache(c: ConnectionProfile): Record<string, unknown> {
   const { apiKey: _k, proxyUrl: _p, ...rest } = c
   void _k
@@ -73,10 +92,12 @@ export function toConnectionLocalCache(c: ConnectionProfile): Record<string, unk
   return { ...rest }
 }
 
-/** 从完整 ImageQueueConfig 提取连接域（队列页/单发共用）。 */
+/** 从完整 ImageQueueConfig 提取连接域（队列页/单发共用；过渡期双写透传 model，缺字段回默认）。 */
 export function connectionFromIqConfig(c: ImageQueueConfig): ConnectionProfile {
+  const raw = (c as Partial<ConnectionProfile>).model
   return {
     protocol: c.protocol,
+    model: raw && raw.trim() ? raw : DEFAULT_MODEL,
     apiBase: c.apiBase,
     apiKey: c.apiKey,
     apiKeyState: c.apiKeyState,
@@ -90,7 +111,7 @@ export function connectionFromIqConfig(c: ImageQueueConfig): ConnectionProfile {
   }
 }
 
-/** 连接域回填到完整 ImageQueueConfig（保持队列规则字段不动）。 */
+/** 连接域回填到完整 ImageQueueConfig（保持队列规则字段不动；过渡期双写透传 model）。 */
 export function applyConnectionToIqConfig(base: ImageQueueConfig, conn: Partial<ConnectionProfile>): ImageQueueConfig {
   return { ...base, ...conn }
 }

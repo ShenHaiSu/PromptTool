@@ -108,6 +108,6 @@ describe('need01-02A 单发健壮三件套', () => {
     const w = mount(SingleShotPanel, { global: { plugins: [pinia] } })
     await w.vm.$nextTick()
     expect(w.find('[data-testid="single-shot-empty"]').exists()).toBe(true)
-    expect(w.find('[data-testid="single-shot-empty"]').text()).toContain('先到生图队列保存密钥')
+    expect(w.find('[data-testid="single-shot-empty"]').text()).toContain('模型配置')
   })
 })

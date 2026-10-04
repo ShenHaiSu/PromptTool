@@ -18,6 +18,7 @@ vi.mock('@tauri-apps/api/event', () => ({
 import { useAssemblyStore } from '@/stores/assembly'
 import { useBatchStore } from '@/stores/batch'
 import { useImageQueueStore } from '@/stores/imageQueue'
+import { useConnectionProfileStore } from '@/stores/connectionProfile'
 import { useLibraryStore } from '@/stores/library'
  import { __resetLoopTestState, refillFromEngine, prepareStartQueue, resolveLoopRandomMode, isPartialFallback } from '@/lib/imageLoop'
 
@@ -25,6 +26,9 @@ function seedRunningLoop(concurrency = 2): void {
   const iq = useImageQueueStore()
   iq.config.loopEnabled = true
   iq.config.apiKeyState = 'set'
+  try {
+    useConnectionProfileStore().profile.apiKeyState = 'set'
+  } catch { /* ignore */ }
   iq.runningGen = 1
   iq.__applyStatsNow({ queued: 0, running: 1, succeeded: 0, failed: 0, consecFail: 0, stopped: false })
   iq.config.concurrency = concurrency
@@ -61,6 +65,8 @@ describe('prepareStartQueue 开始前备料', () => {
     iq.config.autoRandomOnStart = true
     iq.config.apiKeyState = 'set'
     iq.config.concurrency = concurrency
+    // need02 守卫改读模型 SSOT：同步播种 conn.profile
+    useConnectionProfileStore().profile.apiKeyState = 'set'
   }
   function seedBatchResult(): void {
     const batch = useBatchStore()

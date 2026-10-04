@@ -120,6 +120,10 @@ pub fn run() {
              commands::image_queue::queue::iq_set_config,
              commands::image_queue::queue::iq_get_config,
              commands::image_queue::queue::iq_test_connection,
+             // --- need02 模型 SSOT 3 命令（唯一可写面；旧 iq_* 保留兼容读写） ---
+             commands::image_queue::queue::model_get,
+             commands::image_queue::queue::model_set,
+             commands::image_queue::queue::model_test_connection,
              commands::image_queue::queue::iq_enqueue,
              commands::image_queue::queue::iq_start,
              commands::image_queue::queue::iq_stop,

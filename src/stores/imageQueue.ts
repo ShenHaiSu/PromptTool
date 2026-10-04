@@ -40,6 +40,8 @@ import {
   type IqTestResult,
 } from '@/lib/imageQueueApi'
 import { useBatchStore } from '@/stores/batch'
+import { useConnectionProfileStore } from '@/stores/connectionProfile'
+import { isConnectionReady } from '@/lib/connectionProfile'
 
 export type { ImageTaskView, IqStats }
 export type IqTestState = { ok: boolean; elapsedMs?: number; message?: string } | null
@@ -461,9 +463,16 @@ export const useImageQueueStore = defineStore('imageQueue', () => {
       push('暂无批量结果可入队', 'warning')
       return
     }
-    if (config.value.apiKeyState === 'unset' && !config.value.apiKey) {
-      push('未设置 API 密钥', 'warning')
-      return
+    try {
+      if (!isConnectionReady(useConnectionProfileStore().profile)) {
+        push('未设置 API 密钥，请去右上「模型配置」设置', 'warning')
+        return
+      }
+    } catch {
+      if (config.value.apiKeyState === 'unset' && !config.value.apiKey) {
+        push('未设置 API 密钥', 'warning')
+        return
+      }
     }
     const items = batch.results.map((r) => ({ prompt: r.finalPrompt, irHash: r.hash }))
     const { enqueued, skipped } = await enqueueBatch(items)
@@ -471,9 +480,16 @@ export const useImageQueueStore = defineStore('imageQueue', () => {
   }
 
   async function start(): Promise<void> {
-    if (config.value.apiKeyState === 'unset' && !config.value.apiKey) {
-      push('未设置 API 密钥', 'warning')
-      return
+    try {
+      if (!isConnectionReady(useConnectionProfileStore().profile)) {
+        push('未设置 API 密钥，请去右上「模型配置」设置', 'warning')
+        return
+      }
+    } catch {
+      if (config.value.apiKeyState === 'unset' && !config.value.apiKey) {
+        push('未设置 API 密钥', 'warning')
+        return
+      }
     }
     try {
       const gen = await iqStart()

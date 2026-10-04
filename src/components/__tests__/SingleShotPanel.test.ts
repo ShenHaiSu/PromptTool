@@ -3,6 +3,7 @@ import { mount, type DOMWrapper } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
 import SingleShotPanel from '../SingleShotPanel.vue'
 import { useImageQueueStore } from '@/stores/imageQueue'
+import { useConnectionProfileStore } from '@/stores/connectionProfile'
 
 vi.mock('@/lib/db', () => ({
   dbRevealInExplorer: vi.fn().mockResolvedValue(undefined),
@@ -37,6 +38,8 @@ function mountPanel() {
   const iq = useImageQueueStore()
   iq.config.apiKeyState = 'set'
   iq.config.apiKey = 'test-key'
+  // need02 守卫只读模型 SSOT
+  useConnectionProfileStore().profile.apiKeyState = 'set'
   return mount(SingleShotPanel, { global: { plugins: [pinia] } })
 }
 

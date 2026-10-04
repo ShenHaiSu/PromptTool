@@ -5,14 +5,20 @@
  import { dbRevealInExplorer } from '@/lib/db'
  import { iqOpenOutputDir, iqFindByFilename } from '@/lib/imageQueueApi'
  import { useImageQueueStore } from '@/stores/imageQueue'
+import { useConnectionProfileStore } from '@/stores/connectionProfile'
+import { isConnectionReady } from '@/lib/connectionProfile'
  import { useImageTaskDialog } from '@/composables/useImageTaskDialog'
  import { useStatsReport } from '@/composables/useStatsReport'
  import { refillFromEngine, cancelRefill, resetRefillCancel, prepareStartQueue } from '@/lib/imageLoop'
  import { useVirtualizer } from '@tanstack/vue-virtual'
  import ImageTaskCard from '@/components/ImageTaskCard.vue'
  import ImageQueueSettings from '@/components/ImageQueueSettings.vue'
- const emit = defineEmits<{ (e: 'switch-to-prompt'): void }>()
+ const emit = defineEmits<{ (e: 'switch-to-prompt'): void; (e: 'switch-to-model'): void }>()
  const iq = useImageQueueStore()
+ const conn = useConnectionProfileStore()
+ function gotoModel(): void {
+   emit('switch-to-model')
+ }
  const { push } = useToast()
  const taskDialog = useImageTaskDialog()
  const statsUi = useStatsReport()
@@ -21,10 +27,10 @@
  const statsText = computed(
    () => `成功 ${iq.stats.succeeded} · 失败 ${iq.stats.failed} · 排队 ${iq.stats.queued} · 运行 ${iq.stats.running}/并发${iq.config.concurrency}`,
  )
- const keyMissing = computed(() => iq.config.apiKeyState === 'unset' && !iq.config.apiKey)
- const keyDot = computed(() => (iq.config.apiKeyState === 'set' || iq.config.apiKey ? '●' : '○'))
- const keyDotClass = computed(() => (iq.config.apiKeyState === 'set' || iq.config.apiKey ? 'text-green-600' : 'text-amber-600'))
- const configSummary = computed(() => `${iq.config.size}·${iq.config.ratio}·并发${iq.config.concurrency}`)
+ const keyMissing = computed(() => !isConnectionReady(conn.profile))
+ const keyDot = computed(() => (isConnectionReady(conn.profile) ? '●' : '○'))
+ const keyDotClass = computed(() => (isConnectionReady(conn.profile) ? 'text-green-600' : 'text-amber-600'))
+ const configSummary = computed(() => `${iq.config.size}·${iq.config.ratio}·并发${iq.config.concurrency}·${conn.profile.model === 'agnes-image-2.5-flash' ? 'agnes-flash' : conn.profile.model}`)
 
  function requestCloseSettings(): void {
    if (iq.dirty && !window.confirm('配置未保存，确定关闭？')) return
@@ -141,6 +147,7 @@ onMounted(async () => {
   })
   try {
     await iq.loadConfig()
+    conn.syncFromModel()
   } catch { /* 降级：缓存/默认 */ }
   await iq.initQueue()
 })
@@ -207,7 +214,7 @@ onMounted(async () => {
        </div>
        <button
          class="ml-auto flex items-center gap-1.5 text-[11px]"
-         :title="`当前配置：${configSummary}，点击展开配置`"
+         title="当前配置（模型配置在最右 Tab），点击展开队列配置"
          @click="showSettings = !showSettings"
        >
          <span :class="keyDotClass" title="API 密钥状态">{{ keyDot }}</span>
@@ -219,14 +226,14 @@ onMounted(async () => {
          v-if="showSettings"
          class="absolute right-0 top-full z-20 max-h-[70vh] w-[min(640px,94%)] overflow-auto rounded-xl border bg-background shadow-xl"
        >
-         <ImageQueueSettings />
+         <ImageQueueSettings @goto-model="gotoModel" />
        </div>
      </div>
      <div v-if="showSettings" class="fixed inset-0 z-10" @click="requestCloseSettings"></div>
 
     <div v-if="keyMissing" class="mx-3 mb-1 rounded border border-amber-500/30 bg-amber-50 px-2 py-1 text-[11px] text-amber-700 dark:bg-amber-950 dark:text-amber-300">
       未设置 API 密钥
-      <button class="ml-1 text-primary" @click="showSettings = true">去配置</button>
+      <button data-testid="iq-goto-model" class="ml-1 text-primary" @click="gotoModel">去配置</button>
     </div>
     <div v-if="iq.degraded" class="mx-3 mb-1 rounded border border-amber-500/30 bg-amber-50 px-2 py-1 text-[11px] text-amber-700 dark:bg-amber-950 dark:text-amber-300">
       事件通道不可用，已降级轮询

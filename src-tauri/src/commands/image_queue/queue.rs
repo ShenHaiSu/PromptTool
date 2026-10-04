@@ -23,8 +23,9 @@ use tauri::{AppHandle, Emitter, Manager, State};
 
 use super::agnes::{generate_one, mask_secret, AgnesProvider, IqError, PROBE_PROMPT, SUPPORTED_RATIOS, SUPPORTED_SIZES};
 use super::config::{
-    build_client, delete_secrets, load_config, load_secrets, save_config, save_secrets, ClientFingerprint,
-    ImageQueueConfig, ImageQueueConfigView, KEY_SET_PLACEHOLDER,
+    apply_model_view, build_client, delete_secrets, load_config, load_secrets, model_or_default,
+    model_view_of, save_config, save_secrets, ClientFingerprint, ConnectionSnapshot, ImageQueueConfig,
+    ImageQueueConfigView, ModelConfigView, KEY_SET_PLACEHOLDER,
 };
 use super::embed::{embed_jpg, embed_png, extract_embedded_meta};
 
@@ -44,8 +45,7 @@ pub const PROMPT_MAX_CHARS: usize = 4000;
 pub const MAX_RETRY: u8 = 2;
 /// 单张图片下载上限 100MB，超限中止。
 pub const MAX_IMAGE_BYTES: u64 = 100 * 1024 * 1024;
-/// Agnes 模型名（图片内嵌 meta 用）。
-const AGNES_MODEL: &str = "agnes-image-2.5-flash";
+// need02：模型名改读连接快照（见 `model_or_default`），写死常量已删除。
 
 pub const EVT_TASK_UPDATED: &str = "image-queue://task-updated";
 pub const EVT_STATS: &str = "image-queue://stats";
@@ -249,7 +249,12 @@ impl ImageQueueState {
     /// 取快照 client：指纹命中复用，未命中构造并缓存。
     /// 运行中任务继续用旧 client（快照语义），新任务取新指纹。
     pub fn client_for(&self, cfg: &ImageQueueConfig) -> Result<reqwest::Client, String> {
-        let fp = ClientFingerprint::of(cfg);
+        self.client_for_snapshot(&cfg.connection_snapshot())
+    }
+
+    /// need02：模型快照直取 client（换模型即换指纹，不动在途信号量/任务快照）。
+    pub fn client_for_snapshot(&self, snap: &ConnectionSnapshot) -> Result<reqwest::Client, String> {
+        let fp = ClientFingerprint::of_snapshot(snap);
         let mut cache = self.client_cache.lock().map_err(|e| format!("client 缓存锁失败：{}", e))?;
         if let Some(c) = cache.get(&fp) {
             return Ok(c.clone());
@@ -785,7 +790,7 @@ async fn download_and_persist(
         "irHash": task.ir_hash,
         "size": task.size,
         "ratio": task.ratio,
-        "model": AGNES_MODEL,
+        "model": model_or_default(cfg),
         "imageUrl": url,
         "elapsedMs": elapsed_ms,
         "createdAt": task.created_at,
@@ -984,12 +989,13 @@ async fn scheduler_loop(app: AppHandle) {
 }
 
 async fn worker(app: AppHandle, task_id: String, _permit: tokio::sync::OwnedSemaphorePermit) {
-    // 快照配置 + client（任务不受中途改配置影响）。
-    let (cfg, client_res) = {
+    // 快照配置 + client（任务不受中途改配置影响；need02：endpoint/key/model 全取自连接快照）。
+    let (cfg, snap, client_res) = {
         let st = app.state::<ImageQueueState>();
         let cfg = st.config.lock().map(|c| c.clone()).unwrap_or_default();
-        let client = st.client_for(&cfg);
-        (cfg, client)
+        let snap = cfg.connection_snapshot();
+        let client = st.client_for_snapshot(&snap);
+        (cfg, snap, client)
     };
     // 任务快照（不存在则直接收尾）。
     let task = {
@@ -1014,7 +1020,7 @@ async fn worker(app: AppHandle, task_id: String, _permit: tokio::sync::OwnedSema
         return;
     }
 
-    match generate_one(&client, &cfg.api_base, &cfg.api_key, &task.prompt, &task.size, &task.ratio).await {
+    match generate_one(&client, &snap.api_base, &snap.api_key, &snap.model, &task.prompt, &task.size, &task.ratio).await {
         Ok((url, ms)) => {
             let st = app.state::<ImageQueueState>();
             match download_and_persist(&app, &st, &client, &cfg, &task, &url, ms).await {
@@ -1186,7 +1192,7 @@ fn halt_circuit(app: &AppHandle, message: &str) {
  }
 
 // ------------------------------------------------------------------
-// 命令（11 个，`lib.rs` 注册；invoke 参数名以 Rust snake_case 的 camelCase 为准）
+// 命令（19 个，`lib.rs` 注册；invoke 参数名以 Rust snake_case 的 camelCase 为准）
 // ------------------------------------------------------------------
 
 #[tauri::command]
@@ -1204,6 +1210,11 @@ pub fn iq_set_config(
         }
         if next.proxy_url == KEY_SET_PLACEHOLDER {
             next.proxy_url = cur.proxy_url.clone();
+        }
+        // need02：旧面板误写防护——`iq_set_config` 忽略模型字段，唯一写点为 `model_set`。
+        if next.model != cur.model {
+            eprintln!("[image-queue] iq_set_config 忽略模型字段（请经 model_set 修改）");
+            next.model = cur.model.clone();
         }
     }
     next.validate_and_normalize()?;
@@ -1247,6 +1258,86 @@ pub fn iq_get_config(state: State<'_, ImageQueueState>) -> Result<ImageQueueConf
     Ok(state.config.lock().map_err(|e| format!("配置锁失败：{}", e))?.view())
 }
 
+// ------------------------------------------------------------------
+// need02 模型 SSOT 三命令（唯一可写面；`lib.rs` 注册；参数一律 camelCase）
+// ------------------------------------------------------------------
+
+/// 读模型 SSOT（connection.json + 内存 key/proxy 合并，占位语义同 `iq_get_config`）。
+#[tauri::command]
+pub fn model_get(state: State<'_, ImageQueueState>) -> Result<ModelConfigView, String> {
+    let guard = state.config.lock().map_err(|e| format!("配置锁失败：{}", e))?;
+    Ok(model_view_of(&guard))
+}
+
+/// 模型唯一写点：`__SET__` 保持原 key/proxy；热更新只换 `client_cache` 指纹，不重建在途信号量/任务快照。
+#[tauri::command]
+pub fn model_set(
+    state: State<'_, ImageQueueState>,
+    app: AppHandle,
+    cfg: ModelConfigView,
+) -> Result<ModelConfigView, String> {
+    let mut next = cfg;
+    {
+        let cur = state.config.lock().map_err(|e| format!("配置锁失败：{}", e))?;
+        if next.api_key == KEY_SET_PLACEHOLDER {
+            next.api_key = cur.api_key.clone();
+        }
+        if next.proxy_url == KEY_SET_PLACEHOLDER {
+            next.proxy_url = cur.proxy_url.clone();
+        }
+    }
+    next.validate_and_normalize()?;
+    // 代理构造失败直接 Err，不污染缓存。
+    let probe = ConnectionSnapshot {
+        protocol: next.protocol.clone(),
+        model: next.model.clone(),
+        api_base: next.api_base.clone(),
+        api_key: next.api_key.clone(),
+        proxy_on: next.proxy_on,
+        proxy_url: next.proxy_url.clone(),
+        connect_secs: next.connect_timeout_secs,
+        total_secs: next.total_timeout_secs,
+    };
+    build_client(&ClientFingerprint::of_snapshot(&probe))?;
+    // 回填内存（仅模型 8 项 + key；队列规则/信号量/任务不动）。
+    let view = {
+        let mut guard = state.config.lock().map_err(|e| format!("配置锁失败：{}", e))?;
+        apply_model_view(&mut guard, &next);
+        let view = model_view_of(&guard);
+        let owned = guard.clone();
+        drop(guard);
+        // 持久化：connection.json（含 model）+ image_queue.json（过渡期双写）必写；敏感按 remember_key 写/删。
+        let data_dir = super::super::migration::data_dir_for(&app)?;
+        save_config(&data_dir, &owned)?;
+        if owned.remember_key {
+            save_secrets(&data_dir, &owned.api_key, &owned.proxy_url)?;
+        } else {
+            delete_secrets(&data_dir);
+        }
+        view
+    };
+    Ok(view)
+}
+
+/// 模型连通性探针：固定 `1K/1:1`，逻辑复用 `run_probe`，仅换快照源，不下载图片。
+#[tauri::command]
+pub async fn model_test_connection(
+    state: State<'_, ImageQueueState>,
+    _app: AppHandle,
+) -> Result<TestConnectionResult, String> {
+    let snap = state.config.lock().map_err(|e| format!("配置锁失败：{}", e))?.connection_snapshot();
+    if snap.api_key.trim().is_empty() {
+        return Ok(TestConnectionResult {
+            ok: false,
+            elapsed_ms: None,
+            stage: Some("auth".to_string()),
+            message: Some("请先填写 API 密钥".to_string()),
+        });
+    }
+    let client = state.client_for_snapshot(&snap)?;
+    Ok(run_probe(&client, &snap).await)
+}
+
 fn stage_of_test_error(msg: &str) -> &'static str {
     if msg.contains("data[0].url") {
         "parse"
@@ -1264,8 +1355,9 @@ pub async fn iq_test_connection(
     state: State<'_, ImageQueueState>,
     _app: AppHandle,
 ) -> Result<TestConnectionResult, String> {
-    let cfg = state.config.lock().map_err(|e| format!("配置锁失败：{}", e))?.clone();
-    if cfg.api_key.trim().is_empty() {
+    // need02：改读模型快照（endpoint/key/model 全取自快照；队列 size/ratio 不进入快照）。
+    let snap = state.config.lock().map_err(|e| format!("配置锁失败：{}", e))?.connection_snapshot();
+    if snap.api_key.trim().is_empty() {
         return Ok(TestConnectionResult {
             ok: false,
             elapsed_ms: None,
@@ -1273,30 +1365,35 @@ pub async fn iq_test_connection(
             message: Some("请先填写 API 密钥".to_string()),
         });
     }
-    let client = state.client_for(&cfg)?;
+    let client = state.client_for_snapshot(&snap)?;
     // 固定探针（1K/1:1），只解析到 image_url 即成功，不下载图片。
-    match generate_one(&client, &cfg.api_base, &cfg.api_key, PROBE_PROMPT, "1K", "1:1").await {
-        Ok((_url, ms)) => Ok(TestConnectionResult {
+    Ok(run_probe(&client, &snap).await)
+}
+
+/// need02：探针执行体（`iq_test_connection` 与 `model_test_connection` 共用同一逻辑，仅快照源一致）。
+async fn run_probe(client: &reqwest::Client, snap: &ConnectionSnapshot) -> TestConnectionResult {
+    match generate_one(&client, &snap.api_base, &snap.api_key, &snap.model, PROBE_PROMPT, "1K", "1:1").await {
+        Ok((_url, ms)) => TestConnectionResult {
             ok: true,
             elapsed_ms: Some(ms),
             stage: None,
             message: None,
-        }),
-        Err(IqError::Retryable(e)) => Ok(TestConnectionResult {
+        },
+        Err(IqError::Retryable(e)) => TestConnectionResult {
             ok: false,
             elapsed_ms: None,
             stage: Some("connect".to_string()),
             message: Some(e),
-        }),
-        Err(IqError::Cancelled) => Ok(TestConnectionResult {
+        },
+        Err(IqError::Cancelled) => TestConnectionResult {
             ok: false,
             elapsed_ms: None,
             stage: Some("api".to_string()),
             message: Some("请求被取消".to_string()),
-        }),
+        },
         Err(IqError::Fatal(e)) => {
             let stage = stage_of_test_error(&e).to_string();
-            Ok(TestConnectionResult { ok: false, elapsed_ms: None, stage: Some(stage), message: Some(e) })
+            TestConnectionResult { ok: false, elapsed_ms: None, stage: Some(stage), message: Some(e) }
         }
     }
 }
@@ -1647,17 +1744,18 @@ pub fn iq_open_output_dir(state: State<'_, ImageQueueState>, app: AppHandle) -> 
          return Err("prompt 不能为空".to_string());
      }
      let (size, ratio) = validate_size_ratio(&size, &ratio)?;
-     let (cfg, client) = {
+     let (snap, client) = {
          let cfg = state.config.lock().map_err(|e| format!("配置锁失败：{}", e))?.clone();
          // need01-02B：单发改读连接快照（队列规则不进入快照，client 指纹同理）
+         // need02：endpoint/key/model 全取自快照。
          let snap = cfg.connection_snapshot();
          if snap.api_key.trim().is_empty() {
              return Err("请先配置 API 密钥".to_string());
          }
-         let client = state.client_for(&cfg)?;
-         (cfg, client)
+         let client = state.client_for_snapshot(&snap)?;
+         (snap, client)
      };
-     let (url, ms) = generate_one(&client, &cfg.api_base, &cfg.api_key, &p, &size, &ratio).await.map_err(|e| e.to_string())?;
+     let (url, ms) = generate_one(&client, &snap.api_base, &snap.api_key, &snap.model, &p, &size, &ratio).await.map_err(|e| e.to_string())?;
      let resp = client.get(&url).send().await.map_err(|e| format!("预览下载失败：{}", e))?;
      if !resp.status().is_success() {
          return Err(format!("预览下载失败（{}）", resp.status().as_u16()));
@@ -1724,7 +1822,7 @@ pub fn iq_open_output_dir(state: State<'_, ImageQueueState>, app: AppHandle) -> 
      let tmp_path = dir.join(format!("{}.tmp", fname.to_string_lossy()));
      let final_path = dir.join(&fname);
      let single_id = format!("single:{}", uuid::Uuid::new_v4());
-     let meta = serde_json::json!({ "prompt": p, "irHash": null, "size": size, "ratio": ratio, "model": AGNES_MODEL, "imageUrl": null, "elapsedMs": 0, "createdAt": now_ts, "taskId": single_id });
+     let meta = serde_json::json!({ "prompt": p, "irHash": null, "size": size, "ratio": ratio, "model": model_or_default(&cfg), "imageUrl": null, "elapsedMs": 0, "createdAt": now_ts, "taskId": single_id });
      let meta_bytes = serde_json::to_string(&meta).unwrap_or_default().into_bytes();
      let out: Vec<u8> = if cfg.embed_meta {
          match ext {

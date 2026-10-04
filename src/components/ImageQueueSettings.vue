@@ -4,21 +4,25 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { useToast } from '@/composables/useToast'
 import { useImageQueueStore } from '@/stores/imageQueue'
+import { useConnectionProfileStore } from '@/stores/connectionProfile'
  import { useAssemblyStore } from '@/stores/assembly'
 import { iqGetResolvedOutputDir, pathGetBases } from '@/lib/imageQueueApi'
 import {
-  IQ_DEFAULT_API_BASE,
   IQ_DEFAULT_OUTPUT_HINT,
   IQ_PIXELS,
   IQ_PROTOCOLS,
   IQ_RATIOS,
   IQ_SIZES,
   iqPixelHint,
-  trimTrailingSlash,
 } from '@/lib/imageQueue'
 
 const iq = useImageQueueStore()
+const conn = useConnectionProfileStore()
 const { push } = useToast()
+const emit = defineEmits<{ (e: 'goto-model'): void }>()
+function gotoModel(): void {
+  emit('goto-model')
+}
 
 const showKey = ref(false)
 const customConcurrency = ref(false)
@@ -29,37 +33,34 @@ const pixelTable = computed(() => {
   const row = IQ_PIXELS[iq.config.ratio] ?? {}
   return (IQ_SIZES as readonly string[]).map((s) => `${s} ${row[s] ?? '?'}`).join(' · ')
 })
-const socksWarning = computed(() => /^socks5:\/\//i.test(iq.config.proxyUrl.trim()))
+const socksWarning = computed(() => /^socks5:\/\//i.test(conn.profile.proxyUrl.trim()))
  const assembly = useAssemblyStore()
  const anchorCount = computed(() => assembly.selectedItems.length)
 const keyPlaceholder = computed(() => {
-  // S2 脱敏回显：占位态直接展示后端脱敏串，明文永不进输入框；聚焦即清空待重输。
-  if (!iq.keyTouched && iq.config.apiKeyState === 'set') {
-    return iq.config.apiKeyMasked
-      ? `${iq.config.apiKeyMasked}（已设置，聚焦即清空待重输）`
-      : '已设置（聚焦即清空待重输）'
+  // need02 只读：脱敏串读模型 SSOT，明文永不进输入框。
+  if (conn.profile.apiKeyState === 'set') {
+    return conn.profile.apiKeyMasked
+      ? `${conn.profile.apiKeyMasked}（已设置，去模型配置修改）`
+      : '已设置（去模型配置修改）'
   }
-  return 'sk-…'
+  return 'sk-…（去模型配置设置）'
 })
 const proxyPlaceholder = computed(() =>
-  !iq.proxyTouched && iq.config.proxyUrlState === 'set'
-    ? '已设置（为保密不回显），聚焦即清空待重输'
+  conn.profile.proxyUrlState === 'set'
+    ? '已设置（为保密不回显，去模型配置修改）'
     : 'http://127.0.0.1:10808',
 )
 
 function onApiBaseBlur(): void {
-  iq.config.apiBase = trimTrailingSlash(iq.config.apiBase.trim())
-  iq.markDirty()
+  push('连接字段只读，请去右上「模型配置」修改', 'warning')
 }
 
 function onKeyFocus(): void {
-  // 已设置占位聚焦即清空待重输
-  if (!iq.keyTouched && iq.config.apiKeyState === 'set') iq.config.apiKey = ''
+  // need02 只读：队列页不再承接密钥输入
 }
 
 function onProxyFocus(): void {
-  // 代理与密钥对称：已设置占位聚焦即清空待重输
-  if (!iq.proxyTouched && iq.config.proxyUrlState === 'set') iq.config.proxyUrl = ''
+  // need02 只读：队列页不再承接代理输入
 }
 
 async function onBrowseOutput(): Promise<void> {
@@ -79,13 +80,6 @@ async function onSave(): Promise<void> {
   await iq.saveConfig()
 }
 
-async function onTest(): Promise<void> {
-  await iq.testConnection()
-}
-
-function onCancelTest(): void {
-  iq.cancelTest()
-}
 
 function onResetDefault(): void {
   if (!window.confirm('恢复默认配置（不清除已记住的密钥）？')) return
@@ -122,8 +116,8 @@ function exitCustomConcurrency(): void {
 }
 
 function onResetApiBase(): void {
-  iq.config.apiBase = IQ_DEFAULT_API_BASE
-  iq.markDirty()
+  push('连接字段只读，请去右上「模型配置」修改', 'warning')
+  gotoModel()
 }
 // need07：输出目录 placeholder 显示后端解析值；老默认保留时给 hint
 const resolvedOutputDir = ref('')
@@ -152,23 +146,6 @@ onMounted(async () => {
       >
       <span v-else class="text-[11px] leading-4 text-muted-foreground">已保存</span>
       <div class="ml-auto flex items-center gap-1.5">
-        <Button
-          data-testid="iq-test"
-          size="sm"
-          variant="outline"
-          class="h-7 text-xs"
-          :disabled="iq.testing"
-          @click="onTest"
-          >{{ iq.testing ? '测试中…' : '测试连接' }}</Button
-        >
-        <Button
-          v-if="iq.testing"
-          size="sm"
-          variant="ghost"
-          class="h-7 px-2 text-xs"
-          @click="onCancelTest"
-          >取消</Button
-        >
         <Button data-testid="iq-save" size="sm" class="h-7 text-xs" @click="onSave">保存</Button>
       </div>
     </div>
@@ -258,38 +235,6 @@ onMounted(async () => {
             <button type="button" class="h-6 shrink-0 px-1 text-[11px] text-primary" title="返回步进器" @click="exitCustomConcurrency">预设</button>
           </div>
         </div>
-        <div class="grid grid-cols-2 gap-1.5 text-xs">
-          <label class="flex min-w-0 items-center gap-1">
-            <span class="shrink-0 text-muted-foreground">连接</span>
-            <input
-              data-testid="iq-connect-timeout"
-              type="number"
-              min="5"
-              max="60"
-              step="1"
-              title="连接超时 5..60 秒"
-              class="h-6 w-full min-w-0 rounded-md border bg-background px-1.5 text-xs"
-              :value="iq.config.connectTimeoutSecs"
-              @input="iq.config.connectTimeoutSecs = Math.min(60, Math.max(5, Math.round(Number(($event.target as HTMLInputElement).value) || 15))); iq.markDirty()"
-            />
-            <span class="shrink-0 text-[11px] text-muted-foreground">s</span>
-          </label>
-          <label class="flex min-w-0 items-center gap-1">
-            <span class="shrink-0 text-muted-foreground">总计</span>
-            <input
-              data-testid="iq-total-timeout"
-              type="number"
-              min="60"
-              max="600"
-              step="1"
-              title="总超时 60..600 秒"
-              class="h-6 w-full min-w-0 rounded-md border bg-background px-1.5 text-xs"
-              :value="iq.config.totalTimeoutSecs"
-              @input="iq.config.totalTimeoutSecs = Math.min(600, Math.max(60, Math.round(Number(($event.target as HTMLInputElement).value) || 300))); iq.markDirty()"
-            />
-            <span class="shrink-0 text-[11px] text-muted-foreground">s</span>
-          </label>
-        </div>
         <div class="grid grid-cols-2 gap-x-2 gap-y-1 text-xs">
           <label class="flex min-w-0 items-center gap-1.5" title="队列见底自动补货">
             <input
@@ -349,9 +294,10 @@ onMounted(async () => {
       <!-- 接入卡 -->
       <div class="flex flex-col gap-1.5 rounded-lg border bg-muted/30 p-2.5">
         <div class="flex items-center gap-2">
-          <h3 class="text-xs font-semibold text-muted-foreground">接入</h3>
+          <h3 class="text-xs font-semibold text-muted-foreground">接入（只读）</h3>
+          <button data-testid="iq-goto-model" class="ml-auto shrink-0 text-[11px] text-primary" @click="gotoModel">去模型配置</button>
           <span
-            class="ml-auto rounded-full border px-1.5 text-[11px] leading-4 text-muted-foreground"
+            class="rounded-full border px-1.5 text-[11px] leading-4 text-muted-foreground"
             :title="`协议：${IQ_PROTOCOLS[0]?.label ?? ''}（当前仅支持该协议）`"
             >{{ IQ_PROTOCOLS[0]?.label ?? 'Agnes' }}</span
           >
@@ -361,19 +307,23 @@ onMounted(async () => {
             class="sr-only"
             tabindex="-1"
             aria-hidden="true"
-            :value="iq.config.protocol"
-            @change="iq.config.protocol = ($event.target as HTMLSelectElement).value as 'agnes'; iq.markDirty()"
+            :value="conn.profile.protocol" disabled
+            
           >
             <option v-for="p in IQ_PROTOCOLS" :key="p.value" :value="p.value">{{ p.label }}</option>
           </select>
+        </div>
+        <div class="flex items-center gap-2 text-xs">
+          <span class="shrink-0 text-muted-foreground">模型</span>
+          <span class="min-w-0 flex-1 truncate rounded-md border bg-muted/50 px-2 py-1 text-xs text-muted-foreground" :title="conn.profile.model">{{ conn.profile.model }}</span>
         </div>
         <div class="flex items-center gap-2 text-xs">
           <span class="shrink-0 text-muted-foreground">路径</span>
           <Input
             data-testid="iq-api-base"
             class="h-6 flex-1 text-xs"
-            :model-value="iq.config.apiBase"
-            @update:model-value="iq.config.apiBase = String($event); iq.markDirty()"
+            disabled
+            :model-value="conn.profile.apiBase"
             @blur="onApiBaseBlur"
           />
           <Button size="sm" variant="ghost" class="h-6 shrink-0 px-1.5 text-[11px]" title="重置默认" @click="onResetApiBase">重置</Button>
@@ -385,9 +335,10 @@ onMounted(async () => {
               data-testid="iq-api-key"
               class="h-6 w-full pr-7 text-xs"
               :type="showKey ? 'text' : 'password'"
-              :model-value="iq.config.apiKey"
+              disabled
+              :model-value="''"
               :placeholder="keyPlaceholder"
-              @update:model-value="iq.config.apiKey = String($event); iq.markKeyTouched()"
+              
               @focus="onKeyFocus"
             />
             <button
@@ -400,8 +351,8 @@ onMounted(async () => {
           </div>
         </div>
         <div class="flex items-center gap-2 text-[11px]">
-          <span v-if="iq.config.apiKeyState === 'set'" class="truncate text-green-600"
-            >●已设置{{ iq.config.apiKeyMasked ? ` ${iq.config.apiKeyMasked}` : '' }}</span
+          <span v-if="conn.profile.apiKeyState === 'set'" class="truncate text-green-600"
+            >●已设置{{ conn.profile.apiKeyMasked ? ` ${conn.profile.apiKeyMasked}` : '' }}</span
           >
           <span v-else class="text-muted-foreground">○未设置</span>
           <label class="ml-auto flex shrink-0 items-center gap-1 text-xs">
@@ -409,8 +360,8 @@ onMounted(async () => {
               data-testid="iq-remember-key"
               type="checkbox"
               class="h-3.5 w-3.5 accent-primary"
-              :checked="iq.config.rememberKey"
-              @change="iq.config.rememberKey = ($event.target as HTMLInputElement).checked; iq.markDirty()"
+              disabled
+              :checked="conn.profile.rememberKey"
             />
             <span>记住密钥</span>
           </label>
@@ -420,29 +371,30 @@ onMounted(async () => {
       <!-- 网络卡：折叠紧凑，整行跨两列 -->
       <div class="flex flex-col gap-1 rounded-lg border bg-muted/30 p-2.5 min-[560px]:col-span-2">
         <div class="flex items-center gap-2 text-xs">
-          <h3 class="text-xs font-semibold text-muted-foreground">网络</h3>
+          <h3 class="text-xs font-semibold text-muted-foreground">网络（只读）</h3>
+          <button data-testid="iq-goto-model" class="ml-auto shrink-0 text-[11px] text-primary" @click="gotoModel">去模型配置</button>
           <label class="flex items-center gap-1.5">
             <input
               data-testid="iq-proxy-on"
               type="checkbox"
               class="h-3.5 w-3.5 accent-primary"
-              :checked="iq.config.proxyOn"
-              @change="iq.config.proxyOn = ($event.target as HTMLInputElement).checked; iq.markDirty()"
+              disabled
+              :checked="conn.profile.proxyOn"
             />
             <span>代理启用</span>
           </label>
           <Input
             data-testid="iq-proxy-url"
             class="h-6 flex-1 text-xs"
-            :disabled="!iq.config.proxyOn"
+            disabled
             :placeholder="proxyPlaceholder"
-            :model-value="iq.config.proxyUrl"
-            @update:model-value="iq.config.proxyUrl = String($event); iq.markProxyTouched()"
+            :model-value="''"
+            
             @focus="onProxyFocus"
           />
         </div>
-        <div v-if="!iq.proxyTouched && iq.config.proxyUrlState === 'set'" class="text-[11px] text-green-600">
-          已设置（为保密不回显，聚焦即清空待重输；直接保存即保持原值）
+        <div v-if="conn.profile.proxyUrlState === 'set'" class="text-[11px] text-green-600">
+          已设置（为保密不回显，去模型配置修改；直接保存即保持原值）
         </div>
         <div v-if="socksWarning" class="text-[11px] text-red-600">本期仅支持 http/https</div>
       </div>

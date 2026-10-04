@@ -1,20 +1,25 @@
 /**
- * need01-02B 连接配置 store（单发与队列共用）。
- * 后端仍复用 iq_get_config / iq_set_config（单文件兼容+自动迁移见 config.rs），
- * 前端已拆连接域：App.vue 挂载处 loadConnection()，单发改绑此 store，不再依赖 ImageQueuePanel onMounted。
+ * need02 模型配置 store（单发与队列共用，唯一可写面）。
+ * 后端走 model_get / model_set / model_test_connection（见 config.rs + queue.rs model_*），
+ * 前端已拆连接域：App.vue 挂载处 loadModel()，单发/队列只读此 store。
  */
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
 import {
   DEFAULT_CONNECTION_PROFILE,
+  DEFAULT_MODEL,
   CONNECTION_LOCAL_CACHE_KEY,
   connectionFromIqConfig,
   toConnectionLocalCache,
+  validateConnectionProfile,
   type ConnectionProfile,
+  type ModelProfile,
 } from '@/lib/connectionProfile'
-import { iqGetConfig, viewToConfig, configToPayload } from '@/lib/imageQueueApi'
-import { IQ_DEFAULT_CONFIG } from '@/lib/imageQueue'
+import { modelGet, modelSet, type ModelConfigView } from '@/lib/imageQueueApi'
+import { IQ_DEFAULT_CONFIG, IQ_KEY_SET_PLACEHOLDER } from '@/lib/imageQueue'
 import { useToast } from '@/composables/useToast'
+
+export type { ModelProfile }
 
 export const useConnectionProfileStore = defineStore('connectionProfile', () => {
   const { push } = useToast()
@@ -35,6 +40,9 @@ export const useConnectionProfileStore = defineStore('connectionProfile', () => 
         profile.value = {
           ...DEFAULT_CONNECTION_PROFILE,
           ...(rest as Partial<ConnectionProfile>),
+          model: typeof (rest as Partial<ConnectionProfile>).model === 'string' && (rest as Partial<ConnectionProfile>).model!.trim()
+            ? (rest as Partial<ConnectionProfile>).model!
+            : DEFAULT_MODEL,
           apiKey: '',
           proxyUrl: '',
         }
@@ -48,21 +56,52 @@ export const useConnectionProfileStore = defineStore('connectionProfile', () => 
     } catch { /* ignore */ }
   }
 
+  /** 后端模型视图 → 前端 profile（占位转 set 态，原文置空等待重输）。 */
+  function applyModelView(view: ModelConfigView): void {
+    const prevKey = profile.value.apiKeyState
+    const prevProxy = profile.value.proxyUrlState
+    profile.value = {
+      protocol: 'agnes',
+      model: view.model && view.model.trim() ? view.model : DEFAULT_MODEL,
+      apiBase: view.apiBase,
+      apiKey: '',
+      apiKeyState: view.apiKey === IQ_KEY_SET_PLACEHOLDER || (view as { apiKeyMasked?: string }).apiKeyMasked ? 'set' : (view.apiKey ? 'set' : 'unset'),
+      apiKeyMasked: (view as { apiKeyMasked?: string }).apiKeyMasked ?? '',
+      proxyOn: view.proxyOn,
+      proxyUrl: '',
+      proxyUrlState: view.proxyUrl === IQ_KEY_SET_PLACEHOLDER || view.proxyUrl ? 'set' : 'unset',
+      rememberKey: view.rememberKey,
+      connectTimeoutSecs: view.connectTimeoutSecs,
+      totalTimeoutSecs: view.totalTimeoutSecs,
+    }
+    if (!keyTouched.value && prevKey === 'set' && profile.value.apiKeyState !== 'set') profile.value.apiKeyState = 'set'
+    if (!proxyTouched.value && prevProxy === 'set' && profile.value.proxyUrlState !== 'set') profile.value.proxyUrlState = 'set'
+  }
+
   /** App.vue 挂载处调用；单发/队列共用，失败降级缓存/默认。 */
-  async function loadConnection(): Promise<void> {
+  async function loadModel(): Promise<void> {
     restoreLocalCache()
     try {
-      const view = await iqGetConfig()
-      const full = viewToConfig(view)
-      // 旧 image_queue.json 自动迁移：缺字段即默认（viewToConfig 内已兼容）
-      profile.value = connectionFromIqConfig({ ...IQ_DEFAULT_CONFIG, ...full })
+      const view = await modelGet()
+      applyModelView(view)
     } catch {
-      // 保留缓存/默认值，保证直进单发不被拦截在 unset 之外仍可提示
+      try {
+        // 兼容旧后端（model_* 未注册）：回落 iq 读合并
+        const { iqGetConfig, viewToConfig } = await import('@/lib/imageQueueApi')
+        const view = await iqGetConfig()
+        const full = viewToConfig(view)
+        profile.value = connectionFromIqConfig({ ...IQ_DEFAULT_CONFIG, ...full })
+      } catch { /* 保留缓存/默认值 */ }
     }
     keyTouched.value = false
     proxyTouched.value = false
     loaded.value = true
     persistLocalCache()
+  }
+
+  /** 旧名别名（保留一周防旧调用崩，见 03 §2）。 */
+  async function loadConnection(): Promise<void> {
+    return loadModel()
   }
 
   function markKeyTouched(): void {
@@ -73,23 +112,31 @@ export const useConnectionProfileStore = defineStore('connectionProfile', () => 
     proxyTouched.value = true
   }
 
-  /** 连接页保存（设置页连接卡改绑此 store；队列规则仍走 imageQueue store）。 */
+  /** 模型页保存（唯一可写面；队列规则仍走 imageQueue store）。 */
   async function saveConnection(): Promise<boolean> {
+    const errs = validateConnectionProfile(profile.value)
+    if (errs.length) {
+      push(errs[0]!, 'warning')
+      return false
+    }
     try {
-      const base = { ...IQ_DEFAULT_CONFIG, ...profile.value }
-      const view = await import('@/lib/imageQueueApi').then((m) =>
-        m.iqSetConfig(configToPayload(base as never, keyTouched.value, proxyTouched.value)),
-      )
-      const full = viewToConfig(view)
-      const prevKey = profile.value.apiKeyState
-      const prevProxy = profile.value.proxyUrlState
-      profile.value = connectionFromIqConfig({ ...IQ_DEFAULT_CONFIG, ...full })
-      if (!keyTouched.value && prevKey === 'set') profile.value.apiKeyState = 'set'
-      if (!proxyTouched.value && prevProxy === 'set') profile.value.proxyUrlState = 'set'
+      const payload: ModelConfigView = {
+        protocol: profile.value.protocol,
+        model: profile.value.model && profile.value.model.trim() ? profile.value.model.trim() : DEFAULT_MODEL,
+        apiBase: profile.value.apiBase.trim().replace(/\/+$/, ''),
+        apiKey: keyTouched.value ? profile.value.apiKey : IQ_KEY_SET_PLACEHOLDER,
+        proxyOn: profile.value.proxyOn,
+        proxyUrl: proxyTouched.value ? profile.value.proxyUrl : IQ_KEY_SET_PLACEHOLDER,
+        rememberKey: profile.value.rememberKey,
+        connectTimeoutSecs: profile.value.connectTimeoutSecs,
+        totalTimeoutSecs: profile.value.totalTimeoutSecs,
+      }
+      const view = await modelSet(payload)
+      applyModelView(view)
       keyTouched.value = false
       proxyTouched.value = false
       persistLocalCache()
-      push('连接配置已保存', 'success', 1500)
+      push('模型配置已保存', 'success', 1500)
       return true
     } catch (err) {
       push(`保存失败：${err instanceof Error ? err.message : String(err)}`, 'error')
@@ -107,5 +154,11 @@ export const useConnectionProfileStore = defineStore('connectionProfile', () => 
     }
   }
 
-  return { profile, loaded, keyTouched, proxyTouched, loadConnection, saveConnection, markKeyTouched, markProxyTouched, syncFromIqConfig, persistLocalCache }
+  /** need02 单向同步：队列 store loadConfig 后用模型 SSOT 覆盖只读镜像（B4 收敛读）。 */
+  function syncFromModel(): void {
+    // 模型 store 即 SSOT：队列侧调用此函数即表示“以模型页为准”，此处仅持久化保活
+    persistLocalCache()
+  }
+
+  return { profile, loaded, keyTouched, proxyTouched, loadModel, loadConnection, saveConnection, markKeyTouched, markProxyTouched, syncFromIqConfig, syncFromModel, persistLocalCache }
 })

@@ -6,7 +6,7 @@
 import { invoke } from '@tauri-apps/api/core'
 import { stripVerbatim } from './pathDisplay'
 import type { ImageQueueConfig } from './imageQueue'
-import { IQ_DEFAULT_CONFIG, IQ_KEY_SET_PLACEHOLDER } from './imageQueue'
+import { IQ_DEFAULT_CONFIG, IQ_DEFAULT_MODEL, IQ_KEY_SET_PLACEHOLDER } from './imageQueue'
 
 export type ImageTaskStatus = 'queued' | 'running' | 'succeeded' | 'failed' | 'cancelled'
 
@@ -67,6 +67,7 @@ export type IqConfigView = Omit<ImageQueueConfig, 'apiKeyState' | 'proxyUrlState
 export function configToPayload(c: ImageQueueConfig, keyTouched: boolean, proxyTouched: boolean): IqConfigView {
   return {
     protocol: c.protocol,
+    model: (c as { model?: string }).model ?? IQ_DEFAULT_MODEL,
     loopEnabled: c.loopEnabled,
     autoRandomOnStart: c.autoRandomOnStart,
     loopUsePartial: c.loopUsePartial,
@@ -148,6 +149,35 @@ export async function iqGetConfig(): Promise<IqConfigView> {
 
 export async function iqSetConfig(cfg: IqConfigView): Promise<IqConfigView> {
   return invoke<IqConfigView>('iq_set_config', { cfg })
+}
+
+/** need02 模型 SSOT 视图（唯一可写面的 DTO；队列规则字段不在此出现）。 */
+export interface ModelConfigView {
+  protocol: string
+  model: string
+  apiBase: string
+  apiKey: string
+  apiKeyMasked?: string
+  proxyOn: boolean
+  proxyUrl: string
+  rememberKey: boolean
+  connectTimeoutSecs: number
+  totalTimeoutSecs: number
+}
+
+/** need02：读模型 SSOT（占位语义同 iq_get_config）。 */
+export async function modelGet(): Promise<ModelConfigView> {
+  return invoke<ModelConfigView>('model_get')
+}
+
+/** need02：模型唯一写点（__SET__ 保持原 key/proxy）。 */
+export async function modelSet(cfg: ModelConfigView): Promise<ModelConfigView> {
+  return invoke<ModelConfigView>('model_set', { cfg })
+}
+
+/** need02：模型连通性探针（固定 1K/1:1，不下载图片）。 */
+export async function modelTestConnection(): Promise<IqTestResult> {
+  return invoke<IqTestResult>('model_test_connection')
 }
 
 export async function iqTestConnection(): Promise<IqTestResult> {

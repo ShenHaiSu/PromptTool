@@ -14,6 +14,10 @@
  const iq = useImageQueueStore()
  const conn = useConnectionProfileStore()
  const { push } = useToast()
+ const emit = defineEmits<{ (e: 'switch-to-model'): void }>()
+ function gotoModel(): void {
+   emit('switch-to-model')
+ }
 
 const DRAFT_KEY = 'singleShotDraft'
 /** 上下分栏比例持久化（与主三栏 useSash 的 pmf:sash 相互独立） */
@@ -41,12 +45,8 @@ const outputPlaceholder = ref('')
  const canGenerate = computed(() => !generating.value && prompt.value.trim().length > 0)
  const canSave = computed(() => !saving.value && !generating.value && preview.value != null)
  const promptOverlong = computed(() => prompt.value.trim().length > 4000)
- /** 连接就绪：连接域或队列域任一就绪即放行（过渡期双写，兼容旧单测直设 iq）。 */
- const keyMissing = computed(() => {
-   const connReady = isConnectionReady(conn.profile)
-   const iqReady = iq.config.apiKeyState === 'set' || Boolean(iq.config.apiKey)
-   return !(connReady || iqReady)
- })
+ /** need02 只读：连接就绪只读模型 SSOT（conn.profile），不再双读 iq。 */
+ const keyMissing = computed(() => !isConnectionReady(conn.profile))
 
 /* ---------------- 上下分栏（可拖动分隔条） ---------------- */
 
@@ -318,7 +318,7 @@ async function onCopyFilename(): Promise<void> {
    if (!ratio.value) ratio.value = iq.config.ratio || '1:1'
    // need01-02B：直进单发即加载连接，不再依赖队列面板 onMounted
    if (!conn.loaded) {
-     try { await conn.loadConnection() } catch { /* 降级：回落 iq */ }
+     try { await conn.loadModel() } catch { /* 降级：回落 iq */ }
    }
    try {
      outputPlaceholder.value = await iqGetResolvedOutputDir()
@@ -494,7 +494,7 @@ async function onCopyFilename(): Promise<void> {
        >
          <div>暂无预览 — 填写 prompt 后点「生成」</div>
          <div class="text-[11px]">生成后：鼠标滚轮缩放 · 左键拖拽移动 · 双击复位</div>
-         <div v-if="keyMissing" class="text-[11px] text-amber-600">未检测到 API 密钥 — 先到生图队列保存密钥/或新连接配置页设置</div>
+         <div v-if="keyMissing" class="text-[11px] text-amber-600">未检测到 API 密钥 — 去右上「模型配置」设置<button data-testid="iq-goto-model" class="ml-1 text-primary" @click="gotoModel">去模型配置</button></div>
        </div>
 
       <!-- 已保存信息 -->

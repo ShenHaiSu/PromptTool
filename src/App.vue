@@ -4,6 +4,8 @@
  import BatchFactory from '@/components/BatchFactory.vue'
  import ImageQueuePanel from '@/components/ImageQueuePanel.vue'
   import SingleShotPanel from '@/components/SingleShotPanel.vue'
+  import ModelConfigPanel from '@/components/ModelConfigPanel.vue'
+import { useConnectionProfileStore } from '@/stores/connectionProfile'
   import ImageMetaPanel from '@/components/ImageMetaPanel.vue'
   import StatsReportDialog from '@/components/StatsReportDialog.vue'
  import HistoryPanel from '@/components/HistoryPanel.vue'
@@ -81,7 +83,18 @@ const showSegmentImport = ref(false)
 const dimensionPanelRef = ref<{ refresh: () => Promise<void> } | null>(null)
 const batchFactoryRef = ref<{ refresh: () => Promise<void> } | null>(null)
   // F3 §4 + need01 需求4：中间栏 Tabs（本地 ref，不持久化，默认停留在 prompt；single/meta 按需挂载）
-  const centerTab = ref<'prompt' | 'image' | 'single' | 'meta'>('prompt')
+  const centerTab = ref<'prompt' | 'image' | 'single' | 'meta' | 'model'>('prompt')
+  const connProfile = useConnectionProfileStore()
+  const modelPanelRef = ref<{ isDirty?: () => boolean } | null>(null)
+  const modelKeyDot = computed(() => (connProfile.profile.apiKeyState === 'set' ? '●' : '○'))
+  function switchCenterTab(next: 'prompt' | 'image' | 'single' | 'meta' | 'model'): void {
+    if (centerTab.value === 'model' && next !== 'model') {
+      try {
+        if (modelPanelRef.value?.isDirty?.() && !window.confirm('模型配置未保存，确定切换？')) return
+      } catch { /* 忽略 */ }
+    }
+    centerTab.value = next
+  }
 
 function syncCountsFromLibrary(): void {
   if (library.dimensions.length) dimCount.value = library.dimensions.length
@@ -173,7 +186,7 @@ function onPointerUp(e: PointerEvent): void {
    // need01-02B：连接配置独立预加载（单发与队列共用，直进单发不经队列即可生成）
    try {
      const { useConnectionProfileStore } = await import('@/stores/connectionProfile')
-     await useConnectionProfileStore().loadConnection()
+     await useConnectionProfileStore().loadModel()
    } catch { /* 降级：单发内再次尝试 */ }
  
    try {
@@ -254,7 +267,7 @@ onBeforeUnmount(() => {
              data-testid="center-tab-prompt"
              class="h-6 rounded px-2 text-xs"
              :class="centerTab === 'prompt' ? 'bg-accent font-semibold' : 'text-muted-foreground'"
-             @click="centerTab = 'prompt'"
+             @click="switchCenterTab('prompt')"
            >
              Prompt 批量
            </button>
@@ -262,7 +275,7 @@ onBeforeUnmount(() => {
              data-testid="center-tab-image"
              class="h-6 rounded px-2 text-xs"
              :class="centerTab === 'image' ? 'bg-accent font-semibold' : 'text-muted-foreground'"
-             @click="centerTab = 'image'"
+             @click="switchCenterTab('image')"
            >
              生图队列
            </button>
@@ -270,7 +283,7 @@ onBeforeUnmount(() => {
              data-testid="center-tab-single"
              class="h-6 rounded px-2 text-xs"
              :class="centerTab === 'single' ? 'bg-accent font-semibold' : 'text-muted-foreground'"
-             @click="centerTab = 'single'"
+             @click="switchCenterTab('single')"
            >
              手动单发
            </button>
@@ -278,23 +291,36 @@ onBeforeUnmount(() => {
              data-testid="center-tab-meta"
              class="h-6 rounded px-2 text-xs"
              :class="centerTab === 'meta' ? 'bg-accent font-semibold' : 'text-muted-foreground'"
-             @click="centerTab = 'meta'"
+             @click="switchCenterTab('meta')"
            >
              图片解析
            </button>
+           <button
+             data-testid="center-tab-model"
+             class="ml-auto h-6 shrink-0 rounded px-2 text-xs sticky"
+             :class="centerTab === 'model' ? 'bg-accent font-semibold' : 'text-muted-foreground'"
+             title="模型配置在最右 Tab"
+             @click="switchCenterTab('model')"
+           >
+             模型配置{{ modelKeyDot }}{{ connProfile.profile.apiKeyState === 'set' ? '已设' : '未设' }}
+           </button>
          </div>
          <div v-show="centerTab === 'prompt'" class="flex min-h-0 flex-1 flex-col overflow-hidden">
-           <BatchFactory ref="batchFactoryRef" @switch-to-image="centerTab = 'image'" />
+           <BatchFactory ref="batchFactoryRef" @switch-to-image="switchCenterTab('image')" />
          </div>
          <!-- 生图面板按需挂载：默认停留在 prompt，不预 mount，首屏更快；切 Tab 时 initQueue 回填 -->
          <div v-if="centerTab === 'image'" class="flex min-h-0 flex-1 flex-col overflow-hidden">
-           <ImageQueuePanel @switch-to-prompt="centerTab = 'prompt'" />
+           <ImageQueuePanel @switch-to-prompt="switchCenterTab('prompt')" @switch-to-model="switchCenterTab('model')" />
          </div>
          <!-- 需求4 单发面板按需挂载：内存预览不进 Pinia，切 Tab 未保存即丢弃 -->
          <div v-if="centerTab === 'single'" class="flex min-h-0 flex-1 flex-col overflow-hidden">
-           <SingleShotPanel />
+           <SingleShotPanel @switch-to-model="switchCenterTab('model')" />
          </div>
-         <!-- need02-02 图片解析面板按需挂载：解析对象是任意外部文件，与队列正交；关闭 Tab 即释放预览 -->
+         <!-- need02 模型配置面板按需挂载：唯一可写面，切换不丢草稿由 switchCenterTab 守卫 -->
+        <div v-if="centerTab === 'model'" class="flex min-h-0 flex-1 flex-col overflow-hidden">
+          <ModelConfigPanel ref="modelPanelRef" />
+        </div>
+        <!-- need02-02 图片解析面板按需挂载：解析对象是任意外部文件，与队列正交；关闭 Tab 即释放预览 -->
          <div v-if="centerTab === 'meta'" class="flex min-h-0 flex-1 flex-col overflow-hidden">
            <ImageMetaPanel />
          </div>
