@@ -1,0 +1,16 @@
+/* need03 S2: EP变量桥接 — 唯一允许的覆盖位置，禁止写业务样式 */
+/* 浅色：主色沿用 tokens 的 #3B82F6（hsl 217 91% 60%），圆角沿用 --radius */
+:root {
+  --el-color-primary: hsl(var(--primary));
+  --el-border-radius-base: var(--radius);
+  --el-border-color: hsl(var(--border));
+  --el-bg-color: hsl(var(--background));
+  --el-text-color-primary: hsl(var(--foreground));
+}
+/* 深色：EP暗黑变量由 dark/css-vars.css 提供；主按钮偏暗时在此追加覆盖 */
+html.dark {
+  --el-color-primary: hsl(var(--primary));
+  --el-border-color: hsl(var(--border));
+  --el-bg-color: hsl(var(--background));
+  --el-text-color-primary: hsl(var(--foreground));
+}

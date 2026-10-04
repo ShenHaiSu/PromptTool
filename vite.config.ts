@@ -1,13 +1,15 @@
 import { defineConfig } from "vite"
 import vue from "@vitejs/plugin-vue"
 import path from "node:path"
+import Components from 'unplugin-vue-components/vite'
+import { ElementPlusResolver } from 'unplugin-vue-components/resolvers'
 
 // @ts-expect-error process is a nodejs global
 const host = process.env.TAURI_DEV_HOST
 
 // https://vite.dev/config/
 export default defineConfig(async () => ({
-  plugins: [vue()],
+  plugins: [vue(), Components({ resolvers: [ElementPlusResolver()] })],
 
   // Vite options tailored for Tauri development and only applied in `tauri dev` or `tauri build`
   clearScreen: false,
@@ -37,5 +39,14 @@ export default defineConfig(async () => ({
     environment: "jsdom",
     globals: true,
     include: ["src/**/*.{test,spec}.{ts,js}", "tests/**/*.{test,spec}.{ts,js}"],
+    css: false,
+    server: {
+      deps: { inline: ['element-plus'] },
+    },
+    coverage: {
+      provider: 'v8',
+      reporter: ['text', 'html'],
+      thresholds: { lines: 70, branches: 60 },
+    },
   },
 }))

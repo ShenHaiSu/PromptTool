@@ -12,7 +12,7 @@
         var dark = t ? t === 'dark' : window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
         if (dark) { document.documentElement.classList.add('dark'); document.documentElement.style.colorScheme = 'dark'; }
         else { document.documentElement.style.colorScheme = 'light'; }
-      } catch (e) {}
+      } catch (e) { console.warn('[theme] 首屏主题预应用失败，走默认主题', e); }
     </script>
     <style>html,body{margin:0;min-width:1280px;min-height:720px}</style>
   </head>
