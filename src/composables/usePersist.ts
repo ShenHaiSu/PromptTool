@@ -1,14 +1,12 @@
 /**
- * usePersist — sash / 主题 / 窗口几何持久化
- * localStorage 双写兼容 pmf:sash/pmf-sash 与 pmf:theme/pmf-theme
+ * usePersist — 主题 / 窗口几何持久化（need04：sash 持久化已收敛到 useSash，死代码 persistSash 已清理）
+ * localStorage 双写兼容 pmf:theme/pmf-theme
  * 几何通过可选 Rust Command save_window_state / window 事件最佳尽力持久化
  */
 import { watch, type Ref } from 'vue'
 
 import { logger } from '@/lib/logger'
 
-const SASH_KEY = 'pmf:sash'
-const SASH_LEGACY = 'pmf-sash'
 const THEME_KEY = 'pmf:theme'
 const THEME_LEGACY = 'pmf-theme'
 const GEOMETRY_KEY = 'pmf:geometry'
@@ -32,26 +30,6 @@ function safeSet(key: string, value: string): void {
     // quota / disabled
     logger.warn('usePersist', `写入 ${key} 失败（quota/disabled）：`, e)
   }
-}
-
-// ------------------------------------------------------------------
-// sash
-// ------------------------------------------------------------------
-
-export function persistSash(leftFrac: Ref<number>, centerFrac: Ref<number>): void {
-  watch(
-    [leftFrac, centerFrac],
-    () => {
-      try {
-        const payload = JSON.stringify([leftFrac.value, centerFrac.value])
-        safeSet(SASH_KEY, payload)
-        safeSet(SASH_LEGACY, payload)
-      } catch (e) {
-        logger.warn('usePersist', '持久化 sash 比例失败：', e)
-      }
-    },
-    { flush: 'sync' },
-  )
 }
 
 // ------------------------------------------------------------------
