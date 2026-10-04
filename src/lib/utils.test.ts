@@ -1,17 +1,22 @@
 import { describe, it, expect } from "vitest"
-import { cn } from "./utils"
+import { ellipsis, dimColor } from "./utils"
 
-describe("cn", () => {
-  it("merges class names", () => {
-    expect(cn("p-2", "text-sm")).toBe("p-2 text-sm")
+describe("ellipsis", () => {
+  it("短于上限原样返回", () => {
+    expect(ellipsis("abc", 5)).toBe("abc")
   })
 
-  it("deduplicates tailwind conflicting utilities", () => {
-    // tailwind-merge: later wins
-    expect(cn("p-2", "p-4")).toBe("p-4")
+  it("超出上限截断并补省略号", () => {
+    expect(ellipsis("abcdefgh", 5)).toBe("abcd…")
+  })
+})
+
+describe("dimColor", () => {
+  it("命中维度色板时返回色值", () => {
+    expect(dimColor("body")).toBe("#EC4899")
   })
 
-  it("handles conditional", () => {
-    expect(cn("base", false && "hidden", "visible")).toBe("base visible")
+  it("未知维度回落默认灰", () => {
+    expect(dimColor("not-a-dimension")).toBe("#94A3B8")
   })
 })

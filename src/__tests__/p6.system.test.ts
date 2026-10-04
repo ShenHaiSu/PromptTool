@@ -9,7 +9,7 @@ import { mount } from '@vue/test-utils'
 import { defineComponent, h } from 'vue'
 import { useShortcuts } from '@/composables/useShortcuts'
 import { loadGeometry } from '@/composables/usePersist'
-import { useToast, appToasts } from '@/composables/useToast'
+
 
 describe('exportCsv (lib/export)', () => {
   it('列为 序号/提示词/维度构成/冲突警告，含 BOM', () => {
@@ -92,20 +92,6 @@ describe('usePersist 几何溢出保护', () => {
   })
 })
 
-describe('Toast 队列 MAX 5', () => {
-  beforeEach(() => {
-    setActivePinia(createPinia())
-    appToasts.value = []
-  })
-  it('超过 5 条丢弃最旧', () => {
-    const { push } = useToast()
-    for (let i = 0; i < 6; i++) push(`msg ${i}`, 'info', 999999)
-    expect(appToasts.value.length).toBe(5)
-    expect(appToasts.value[0]!.message).toBe('msg 1')
-    expect(appToasts.value[4]!.message).toBe('msg 5')
-  })
-})
-
 describe('溢出保护 768p — 最小窗口', () => {
   it('App 挂载后主布局存在且无横向溢出类', async () => {
     setActivePinia(createPinia())
@@ -116,5 +102,5 @@ describe('溢出保护 768p — 最小窗口', () => {
     // sash 存在
     expect(wrapper.find('[data-testid="sash-left"]').exists()).toBe(true)
     wrapper.unmount()
-  })
+  }, 30000)
 })

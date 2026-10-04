@@ -24,7 +24,12 @@ describe('need01 需求3+4 契约 testid/命令', () => {
     expect(app).toContain('data-testid="center-tab-single"')
     expect(app).toContain('手动单发')
     expect(app).toContain('<SingleShotPanel')
-    const single = read('src/components/SingleShotPanel.vue')
+    // need03 S4：单发面板已拆为 Panel + Config + Stage 三个文件，testid 契约仍需全覆盖
+    const single = [
+      read('src/components/SingleShotPanel.vue'),
+      read('src/components/single-shot/SingleShotConfig.vue'),
+      read('src/components/single-shot/SingleShotStage.vue'),
+    ].join('\n')
     for (const id of [
       'single-shot-panel',
       'single-shot-prompt',
