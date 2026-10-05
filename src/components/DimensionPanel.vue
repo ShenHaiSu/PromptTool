@@ -47,8 +47,10 @@ defineExpose({ refresh: p.refresh, keyword: p.keyword, allowNsfw: p.allowNsfw, d
       @open-preview="p.previewOpen.value = true"
     />
 
+    <!-- v-show 而非 v-if：切换浏览/已选时保留各自的滚动高度与内部状态 -->
     <DimensionList
-      v-if="p.dimPanelMode.value === 'browse'"
+      v-show="p.dimPanelMode.value === 'browse'"
+      :active="p.dimPanelMode.value === 'browse'"
       :loading="p.loading.value"
       :dims="p.filteredDimensions.value"
       :keyword="p.keyword.value"
@@ -67,7 +69,8 @@ defineExpose({ refresh: p.refresh, keyword: p.keyword, allowNsfw: p.allowNsfw, d
     />
 
     <ModuleList
-      v-else
+      v-show="p.dimPanelMode.value !== 'browse'"
+      :active="p.dimPanelMode.value !== 'browse'"
       :selected-count="p.selectedCount.value"
       :filtered-selected="p.filteredSelected.value"
       :keyword="p.keyword.value"

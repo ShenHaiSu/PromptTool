@@ -1,9 +1,11 @@
 <script setup lang="ts">
+import { computed, ref } from 'vue'
 import { VueDraggable } from 'vue-draggable-plus'
 import { dimColor } from '@/lib/utils'
+import { useScrollPreserve, type ScrollApi } from '@/composables/useScrollPreserve'
 import type { SelectedItem } from '@/engine/models'
 
-defineProps<{
+const props = defineProps<{
   selectedCount: number
   filteredSelected: SelectedItem[]
   keyword: string
@@ -14,6 +16,8 @@ defineProps<{
   activeWeightId: string | null
   draftWeight: number
   weightPos: { top: number; left: number }
+  /** 该面板是否处于可见模式（browse/selected 切换用 v-show，保留各自滚动位置） */
+  active?: boolean
 }>()
 
 const emit = defineEmits<{
@@ -57,6 +61,19 @@ function cardBg(key: string): string {
   const a = isDark ? 0.16 : 0.08
   return `rgba(${r},${g},${b},${a})`
 }
+
+// —— 滚动位置保持（随机/增删已选时不再丢失滚动高度）——
+const scroller = ref<ScrollApi | null>(null)
+/** 列表是否可见：为空/无匹配时不渲染滚动内容，但滚动容器本身保持挂载 */
+const hasItems = computed(() => props.selectedCount > 0 && props.filteredSelected.length > 0)
+const scrollKey = computed(() => `selected:${props.keyword.trim().toLowerCase()}`)
+useScrollPreserve({
+  scroller,
+  persistKey: scrollKey,
+  activeSignal: () => props.active !== false,
+  reloadSignal: () => `${props.selectedCount}:${props.filteredSelected.length}`,
+  resetSignal: () => props.keyword,
+})
 </script>
 
 <template>
@@ -107,7 +124,7 @@ function cardBg(key: string): string {
       无匹配已选项 — <button class="text-primary underline" @click="emit('clear-search')">清空搜索</button>
     </div>
 
-    <el-scrollbar v-else class="flex-1">
+    <el-scrollbar v-show="hasItems" ref="scroller" class="flex-1">
       <div class="p-2">
         <VueDraggable :model-value="filteredSelected" data-testid="selected-draggable" class="flex flex-col gap-2" :animation="150" ghost-class="opacity-40" chosen-class="ring-1 ring-primary" handle=".drag-handle" @update:model-value="emit('update:drag', $event)" @end="emit('drag-end')">
           <div v-for="it in filteredSelected" :key="it.module.id" data-testid="selected-card" :data-module-id="it.module.id"

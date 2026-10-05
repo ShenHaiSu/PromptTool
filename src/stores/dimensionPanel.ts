@@ -4,6 +4,7 @@ import { ref, watch } from 'vue'
 import { logger } from '@/lib/logger'
 
 const STORAGE_EXPANDED = 'pmf:expandedKeys'
+const STORAGE_SCROLL = 'pmf:scrollTop'
 
 function safeGet(key: string): string | null {
   try {
@@ -38,8 +39,47 @@ function loadExpandedKeys(): Set<string> {
   return new Set()
 }
 
+function loadScrollTop(): Record<string, number> {
+  const raw = safeGet(STORAGE_SCROLL)
+  if (!raw) return {}
+  try {
+    const obj = JSON.parse(raw)
+    if (obj && typeof obj === 'object' && !Array.isArray(obj)) {
+      const out: Record<string, number> = {}
+      for (const [k, v] of Object.entries(obj as Record<string, unknown>)) {
+        if (typeof v === 'number' && Number.isFinite(v) && v > 0) out[k] = v
+      }
+      return out
+    }
+  } catch (e) {
+    logger.warn('dimensionPanel', '解析滚动位置持久化失败：', e)
+  }
+  return {}
+}
 export const useDimensionPanelStore = defineStore('dimensionPanel', () => {
   const expandedKeys = ref<Set<string>>(loadExpandedKeys())
+
+  // 滚动位置：按「面板区域 + 搜索词」分桶，数据刷新/模式切换后恢复
+  const scrollTop = ref<Record<string, number>>(loadScrollTop())
+
+  function getScrollTop(key: string): number {
+    const v = scrollTop.value[key]
+    return typeof v === 'number' && Number.isFinite(v) && v > 0 ? v : 0
+  }
+
+  function setScrollTop(key: string, value: number): void {
+    if (!Number.isFinite(value) || value < 0) return
+    const cur = scrollTop.value[key] ?? 0
+    if (Math.abs(cur - value) < 0.5) return
+    scrollTop.value = { ...scrollTop.value, [key]: value }
+  }
+
+  function clearScrollTop(key: string): void {
+    if (!(key in scrollTop.value)) return
+    const next = { ...scrollTop.value }
+    delete next[key]
+    scrollTop.value = next
+  }
 
   function isExpanded(key: string): boolean {
     return expandedKeys.value.has(key)
@@ -78,5 +118,22 @@ export const useDimensionPanelStore = defineStore('dimensionPanel', () => {
     },
   )
 
-  return { expandedKeys, isExpanded, toggleExpand, setExpanded, prune }
+  watch(
+    () => JSON.stringify(scrollTop.value),
+    (v) => {
+      safeSet(STORAGE_SCROLL, v)
+    },
+  )
+
+  return {
+    expandedKeys,
+    isExpanded,
+    toggleExpand,
+    setExpanded,
+    prune,
+    scrollTop,
+    getScrollTop,
+    setScrollTop,
+    clearScrollTop,
+  }
 })

@@ -1,13 +1,17 @@
 <script setup lang="ts">
+import { computed, ref } from 'vue'
+import { useScrollPreserve, type ScrollApi } from '@/composables/useScrollPreserve'
 import type { Dimension, Module } from '@/engine/models'
 
-defineProps<{
+const props = defineProps<{
   loading: boolean
   dims: Dimension[]
   keyword: string
   modulesOf: (dimId: string) => Module[]
   isExpanded: (key: string) => boolean
   isSelected: (id: string) => boolean
+  /** 该面板是否处于可见模式（browse/selected 切换用 v-show，保留各自滚动位置） */
+  active?: boolean
 }>()
 
 const emit = defineEmits<{
@@ -21,12 +25,28 @@ const emit = defineEmits<{
   (e: 'delete-module', m: Module): void
   (e: 'clear-search'): void
 }>()
+
+// —— 滚动位置保持（点击随机/词库刷新不再丢失滚动高度）——
+const scroller = ref<ScrollApi | null>(null)
+/** 空态/有数据：loading 只在无旧数据时接管，避免卸载列表导致 scrollTop 归零 */
+const showLoadingPlaceholder = computed(() => props.loading && props.dims.length === 0)
+/** 有旧数据时的同步提示（不卸载内容） */
+const showSyncingHint = computed(() => props.loading && props.dims.length > 0)
+const scrollKey = computed(() => `browse:${props.keyword.trim().toLowerCase()}`)
+useScrollPreserve({
+  scroller,
+  persistKey: scrollKey,
+  reloadSignal: () => props.loading,
+  resetSignal: () => props.keyword,
+  activeSignal: () => props.active !== false,
+})
 </script>
 
 <template>
-  <el-scrollbar class="flex-1">
+  <el-scrollbar ref="scroller" class="flex-1">
     <div class="p-2">
-      <p v-if="loading" class="py-4 text-center text-xs text-muted-foreground">加载中…</p>
+      <p v-if="showSyncingHint" data-testid="dimension-syncing" class="pb-1 text-center text-[11px] text-muted-foreground">同步中…</p>
+      <div v-if="showLoadingPlaceholder" data-testid="dimension-loading" class="py-4 text-center text-xs text-muted-foreground">加载中…</div>
       <div v-else-if="dims.length === 0" class="p-2">
         <el-empty data-testid="dimension-empty" description="无匹配维度">
           <template #description>

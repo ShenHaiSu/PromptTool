@@ -24,6 +24,22 @@ export function useDimensionPanel() {
   const allowNsfw = ref(false)
   const dimensions = computed(() => library.dimensions)
   const rawGrouped = computed(() => library.modulesByDim as Record<string, Module[]>)
+  // 结果与上次等价时复用旧引用，避免消费方（列表/滚动容器）因引用变化整体失效重绘
+  let modulesByDimCache: Record<string, Module[]> | null = null
+  function sameGrouped(a: Record<string, Module[]>, b: Record<string, Module[]>): boolean {
+    const ka = Object.keys(a)
+    const kb = Object.keys(b)
+    if (ka.length !== kb.length) return false
+    for (const k of ka) {
+      const la = a[k]
+      const lb = b[k]
+      if (!lb || !la || la.length !== lb.length) return false
+      for (let i = 0; i < la.length; i++) {
+        if (la[i] !== lb[i]) return false
+      }
+    }
+    return true
+  }
   const modulesByDim = computed<Record<string, Module[]>>(() => {
     const grouped = rawGrouped.value
     const out: Record<string, Module[]> = {}
@@ -38,6 +54,8 @@ export function useDimensionPanel() {
       const dim = library.dimensions.find((d) => d.id === k)
       if (dim && !out[dim.id]) out[dim.id] = v
     }
+    if (modulesByDimCache && sameGrouped(modulesByDimCache, out)) return modulesByDimCache
+    modulesByDimCache = out
     return out
   })
   const loading = computed(() => library.loading)

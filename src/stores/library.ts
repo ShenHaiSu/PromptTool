@@ -32,17 +32,34 @@ export const useLibraryStore = defineStore('library', () => {
     Object.fromEntries(dimensions.value.map((d) => [d.key, d.sortOrder])),
   )
 
+// —— 无变化写入短路：避免点击随机时整库引用被替换导致面板全量重绘 ——
+
+function dimSignature(list: Dimension[]): string {
+  return list.map((d) => `${d.id}|${d.key}|${d.sortOrder}|${d.isEnabled ? 1 : 0}|${d.isMultiSelect ? 1 : 0}|${d.nameCn}`).join('\u0001')
+}
+
+function moduleSignature(list: Module[]): string {
+  return list.map((m) => `${m.id}|${m.displayName}|${m.contentEn}|${m.weight}|${m.isEnabled ? 1 : 0}|${m.isNsfw ? 1 : 0}|${m.usageCount}`).join('\u0002')
+}
+
+function groupedSignature(grouped: Record<string, Module[]>): string {
+  return Object.keys(grouped).sort().map((k) => `${k}\u0003${moduleSignature(grouped[k] ?? [])}`).join('\u0001')
+}
+
   async function fetchAll(): Promise<void> {
     if (loading.value) return
     loading.value = true
     syncing.value = true
     try {
       const [dims, grouped] = await Promise.all([dbGetDimensions(), dbGetAllModulesGrouped()])
-      dimensions.value = dims
       // 统一按 dimension.id 归一的视图，兼容 db 返回按 key 分组的形态
       // 这里直接以 grouped 的 key 透传，消费方（BatchFactory）按 dim.key 消费；
       // DimensionPanel 另有按 id 归一的 refresh，保持兼容，不在此处二次转换
-      modulesByDim.value = grouped as Record<string, Module[]>
+      // 内容未变化时不替换引用：避免消费方 computed/列表整体失效重绘（滚动位置随之丢失）
+      const nextDims = dims
+      const nextGrouped = grouped as Record<string, Module[]>
+      if (dimSignature(dimensions.value) !== dimSignature(nextDims)) dimensions.value = nextDims
+      if (groupedSignature(modulesByDim.value) !== groupedSignature(nextGrouped)) modulesByDim.value = nextGrouped
       dirty.value = false
       lastSyncedAt.value = Date.now()
     } catch (e) {
