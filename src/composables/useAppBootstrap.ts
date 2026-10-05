@@ -10,8 +10,18 @@ import { logger } from '@/lib/logger'
 /**
  * need03 S4: App 启动编排抽离（原 App.vue onMounted 逻辑原样搬运）。
  * switchCenterTab 脏守卫语义不变。
+ *
+ * 解耦设计：跨域依赖经构造注入（调用方在 App.vue 组装），本模块不再动态 import
+ * 任何 store / composable，避免 "dynamic import will not move module into another chunk"。
  */
-export function useAppBootstrap() {
+export interface AppBootstrapDeps {
+  /** 窗口几何持久化（默认见 App.vue 传入 persistGeometry）。 */
+  persistGeometry?: () => void
+  /** 生图连接模型加载（默认见 App.vue 传入 connectionProfile store 的 loadModel）。 */
+  loadConnectionModel?: () => Promise<void>
+}
+
+export function useAppBootstrap(deps: AppBootstrapDeps = {}) {
   const assembly = useAssemblyStore()
   const historyStore = useHistoryStore()
   const dbRegistry = useDbRegistryStore()
@@ -31,8 +41,7 @@ export function useAppBootstrap() {
 
   async function bootstrap(): Promise<void> {
     try {
-      const { persistGeometry } = await import('@/composables/usePersist')
-      persistGeometry()
+      deps.persistGeometry?.()
     } catch (err) {
       logger.warn('AppBootstrap', 'persistGeometry', err)
     }
@@ -40,8 +49,7 @@ export function useAppBootstrap() {
     onEvent(LIBRARY_CHANGED, handleLibraryChanged)
 
     try {
-      const { useConnectionProfileStore } = await import('@/stores/connectionProfile')
-      await useConnectionProfileStore().loadModel()
+      await deps.loadConnectionModel?.()
     } catch (err) {
       logger.warn('AppBootstrap', 'loadModel降级', err)
     }

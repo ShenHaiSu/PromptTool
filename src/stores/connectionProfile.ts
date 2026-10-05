@@ -16,7 +16,7 @@ import {
   type ConnectionProfile,
   type ModelProfile,
 } from '@/lib/connectionProfile'
-import { modelGet, modelSet, type ModelConfigView } from '@/lib/imageQueueApi'
+ import { modelGet, modelSet, iqGetConfig, viewToConfig, type ModelConfigView } from '@/lib/imageQueueApi'
 import { IQ_DEFAULT_CONFIG, IQ_KEY_SET_PLACEHOLDER } from '@/lib/imageQueue'
 import { notify } from '@/lib/notify'
 
@@ -85,20 +85,19 @@ export const useConnectionProfileStore = defineStore('connectionProfile', () => 
   /** App.vue 挂载处调用；单发/队列共用，失败降级缓存/默认。 */
   async function loadModel(): Promise<void> {
     restoreLocalCache()
-    try {
-      const view = await modelGet()
-      applyModelView(view)
-    } catch {
-      try {
-        // 兼容旧后端（model_* 未注册）：回落 iq 读合并
-        const { iqGetConfig, viewToConfig } = await import('@/lib/imageQueueApi')
-        const view = await iqGetConfig()
-        const full = viewToConfig(view)
-        profile.value = connectionFromIqConfig({ ...IQ_DEFAULT_CONFIG, ...full })
-      } catch (e) {
-        logger.warn('connectionProfile', '回落 iq 配置读取失败（保留缓存/默认值）：', e)
-      }
-    }
+     try {
+       const view = await modelGet()
+       applyModelView(view)
+     } catch {
+       try {
+         // 兼容旧后端（model_* 未注册）：回落 iq 读合并（静态导入，同主包，无分包警告）
+         const view = await iqGetConfig()
+         const full = viewToConfig(view)
+         profile.value = connectionFromIqConfig({ ...IQ_DEFAULT_CONFIG, ...full })
+       } catch (e) {
+         logger.warn('connectionProfile', '回落 iq 配置读取失败（保留缓存/默认值）：', e)
+       }
+     }
     keyTouched.value = false
     proxyTouched.value = false
     loaded.value = true

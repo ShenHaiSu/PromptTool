@@ -79,30 +79,39 @@ export function loadGeometry(): Geometry | null {
   return null
 }
 
-export function persistGeometry(): void {
-  // 仅在 Tauri 环境可用时通过 Rust 侧保存；前端仅 localStorage 兜底
-  function save(): void {
-    try {
-      const g: Geometry = { width: window.innerWidth, height: window.innerHeight }
-      if (g.width < MIN_GEOMETRY.width || g.height < MIN_GEOMETRY.height) return
-      const payload = JSON.stringify(g)
-      safeSet(GEOMETRY_KEY, payload)
-      safeSet(GEOMETRY_LEGACY, payload)
-      // 可选 Rust 侧：invoke('save_window_state', { width, height }) — best effort
-      // 动态导入避免 cycle；失败仅留痕
-      void import('@tauri-apps/api/core')
-        .then(({ invoke }) => invoke('save_window_state', { width: g.width, height: g.height }).catch((e: unknown) => {
-          logger.warn('usePersist', 'save_window_state 调用失败（best effort）：', e)
-        }))
-        .catch((e: unknown) => { logger.warn('usePersist', 'Tauri core 动态导入失败（best effort）：', e) })
-    } catch (e) {
-      logger.warn('usePersist', '持久化窗口几何失败：', e)
-    }
-  }
-  window.addEventListener('beforeunload', save)
-  // 暴露 save 以便组件 unmount 时亦可调用
-  ;(persistGeometry as unknown as { _save: typeof save })._save = save
-}
+ export interface PersistGeometryOpts {
+   /** Rust 侧窗口状态同步（best effort，见 src/lib/windowState.ts；未注入则只写 localStorage）。 */
+   saveWindowState?: (width: number, height: number) => Promise<unknown>
+ }
+
+ export function persistGeometry(opts: PersistGeometryOpts = {}): void {
+   // 仅在 Tauri 环境可用时通过 Rust 侧保存；前端仅 localStorage 兜底
+   function save(): void {
+     try {
+       const g: Geometry = { width: window.innerWidth, height: window.innerHeight }
+       if (g.width < MIN_GEOMETRY.width || g.height < MIN_GEOMETRY.height) return
+       const payload = JSON.stringify(g)
+       safeSet(GEOMETRY_KEY, payload)
+       safeSet(GEOMETRY_LEGACY, payload)
+       // Rust 侧同步经端口注入（composable 自身不依赖 Tauri，避免动态导入分包警告）；失败仅留痕
+       const saver = opts.saveWindowState
+       if (saver) {
+         try {
+           void saver(g.width, g.height).catch((e: unknown) => {
+             logger.warn('usePersist', 'save_window_state 调用失败（best effort）：', e)
+           })
+         } catch (e) {
+           logger.warn('usePersist', 'save_window_state 调用失败（best effort）：', e)
+         }
+       }
+     } catch (e) {
+       logger.warn('usePersist', '持久化窗口几何失败：', e)
+     }
+   }
+   window.addEventListener('beforeunload', save)
+   // 暴露 save 以便组件 unmount 时亦可调用
+   ;(persistGeometry as unknown as { _save: typeof save })._save = save
+ }
 
 export function getPersistedGeometrySave(): (() => void) | undefined {
   return (persistGeometry as unknown as { _save?: () => void })._save

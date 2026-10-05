@@ -27,20 +27,26 @@ import DbManagerDrawer from '@/components/DbManagerDrawer.vue'
 import ImageTaskDetailDialog from '@/components/ImageTaskDetailDialog.vue'
 import { useDbRegistryStore } from '@/stores/dbRegistry'
 import { useLibraryStore } from '@/stores/library'
-import { useAppBootstrap } from '@/composables/useAppBootstrap'
-
-const assembly = useAssemblyStore()
-const historyStore = useHistoryStore()
-const dbRegistry = useDbRegistryStore()
-const themeStore = useThemeStore()
-const library = useLibraryStore()
-void themeStore.mode
-const { leftFrac, setLeftFrac } = useSash()
-const push = notify
-const { dimCount, moduleCount, syncCountsFromLibrary } = useAppBootstrap()
-
-function focusSearch(): void {
-  const el = document.querySelector<HTMLInputElement>('[data-testid="dimension-search"]')
+ import { useAppBootstrap } from '@/composables/useAppBootstrap'
+ import { persistGeometry } from '@/composables/usePersist'
+ import { saveWindowState } from '@/lib/windowState'
+ 
+ const assembly = useAssemblyStore()
+ const historyStore = useHistoryStore()
+ const dbRegistry = useDbRegistryStore()
+ const themeStore = useThemeStore()
+ const library = useLibraryStore()
+ void themeStore.mode
+ const { leftFrac, setLeftFrac } = useSash()
+ const push = notify
+ // 启动编组装点：跨域依赖在此注入，useAppBootstrap 自身不再动态 import
+ const { dimCount, moduleCount, syncCountsFromLibrary } = useAppBootstrap({
+   persistGeometry: () => persistGeometry({ saveWindowState }),
+   loadConnectionModel: () => useConnectionProfileStore().loadModel(),
+ })
+ 
+ function focusSearch(): void {
+   const el = document.querySelector<HTMLInputElement>('[data-testid="dimension-search"]')
   el?.focus()
   el?.select()
 }

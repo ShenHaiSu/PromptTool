@@ -45,11 +45,12 @@ import { isConnectionReady } from '@/lib/connectionProfile'
    else window.removeEventListener('keydown', onSettingsKeydown)
  })
 
-async function onStart(): Promise<void> {
-  const prep = await prepareStartQueue()
-  if (prep.kind === 'blocked') return
-  await iq.start()
-}
+ async function onStart(): Promise<void> {
+   // 连接就绪判定由面板侧组装注入（SSOT：connectionProfile store），imageLoop 自身不依赖连接域
+   const prep = await prepareStartQueue({ connection: { isReady: () => isConnectionReady(conn.profile) } })
+   if (prep.kind === 'blocked') return
+   await iq.start()
+ }
 
 async function onStop(): Promise<void> {
   cancelRefill()

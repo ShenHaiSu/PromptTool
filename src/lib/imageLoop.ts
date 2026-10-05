@@ -185,30 +185,41 @@ export type StartPrepareResult =
  * - 无随机结果 → 直接随机并发数条入队；
  * - 备料为空则 blocked，调用方中止启动。失败只 toast，不抛。
  */
-export async function prepareStartQueue(opts?: {
-  engine?: EngineFns
-  push?: (msg: string, type?: 'info' | 'success' | 'warning' | 'error', ms?: number) => void
-  confirm?: (msg: string) => boolean
-}): Promise<StartPrepareResult> {
-  const push = opts?.push ?? notify
-  const confirm = opts?.confirm ?? ((msg: string) => window.confirm(msg))
-  try {
-    const iq = useImageQueueStore()
-    if (!iq.config.autoRandomOnStart) return { kind: 'direct' }
-    try {
-      const { useConnectionProfileStore } = await import('@/stores/connectionProfile')
-      const { isConnectionReady } = await import('@/lib/connectionProfile')
-      if (!isConnectionReady(useConnectionProfileStore().profile)) {
-        push('未设置生图密钥，无法开始（请去右上「模型配置」设置）', 'warning')
-        return { kind: 'blocked', reason: 'no-key' }
-      }
-    } catch (e) {
-      logger.warn('imageLoop', '读取生图连接就绪态失败（下方按配置判定）：', e)
-      if (iq.config.apiKeyState === 'unset' && !iq.config.apiKey) {
-        push('未设置生图密钥，无法开始', 'warning')
-        return { kind: 'blocked', reason: 'no-key' }
-      }
-    }
+ export interface ConnectionGate {
+   /** 连接是否就绪（默认实现见调用方注入；回落读队列自身 apiKey 态）。 */
+   isReady(): boolean
+ }
+ 
+ /** 端口调用守卫：注入的 isReady 抛错时记日志并按未就绪处理（禁止启动，避免空跑）。 */
+ function safeConnectionReady(gate: ConnectionGate): boolean {
+   try {
+     return gate.isReady()
+   } catch (e) {
+     logger.warn('imageLoop', '连接就绪判定失败（按未就绪处理）：', e)
+     return false
+   }
+ }
+ 
+ export async function prepareStartQueue(opts?: {
+   engine?: EngineFns
+   push?: (msg: string, type?: 'info' | 'success' | 'warning' | 'error', ms?: number) => void
+   confirm?: (msg: string) => boolean
+   /** 连接域端口：调用方注入 SSOT 判定，imageLoop 自身不再依赖连接模块。 */
+   connection?: ConnectionGate
+ }): Promise<StartPrepareResult> {
+   const push = opts?.push ?? notify
+   const confirm = opts?.confirm ?? ((msg: string) => window.confirm(msg))
+   try {
+     const iq = useImageQueueStore()
+     if (!iq.config.autoRandomOnStart) return { kind: 'direct' }
+     // 连接就绪判定经端口注入；未注入时回落读队列自身 apiKey 态（单测/降级路径）。
+     const connectionReady = opts?.connection
+       ? safeConnectionReady(opts.connection)
+       : iq.config.apiKeyState === 'set' || Boolean(iq.config.apiKey)
+     if (!connectionReady) {
+       push('未设置生图密钥，无法开始（请去右上「模型配置」设置）', 'warning')
+       return { kind: 'blocked', reason: 'no-key' }
+     }
     const count = Math.min(8, Math.max(1, Math.round(iq.config.concurrency) || 1))
     const batch = useBatchStore()
     let items: DrawnPrompt[]

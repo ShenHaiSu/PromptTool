@@ -1,21 +1,19 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 
-const messageMock = vi.fn()
-
-vi.mock('element-plus', () => ({
-  ElMessage: (opts: unknown) => messageMock(opts),
-}))
-
-import { notify, push } from './notify'
+import { notify, push, registerNotifyHandler, __clearNotifyHandler, type NotifyType } from './notify'
 
 describe('notify（S5 通知统一出口）', () => {
+  const handlerMock = vi.fn<(message: string, type: NotifyType, ms?: number) => void>()
+
   beforeEach(() => {
-    messageMock.mockClear()
+    handlerMock.mockClear()
+    registerNotifyHandler(handlerMock)
     vi.spyOn(console, 'error').mockImplementation(() => {})
     vi.spyOn(console, 'log').mockImplementation(() => {})
   })
 
   afterEach(() => {
+    __clearNotifyHandler()
     vi.restoreAllMocks()
   })
 
@@ -24,24 +22,36 @@ describe('notify（S5 通知统一出口）', () => {
     expect(push).toBe(notify)
   })
 
-  it('默认 info + 3000ms 透传给 ElMessage', async () => {
+  it('默认 info + 3000ms 透传给已注册 handler', () => {
     notify('hello')
-    await vi.waitFor(() => expect(messageMock).toHaveBeenCalled())
-    expect(messageMock).toHaveBeenCalledWith(expect.objectContaining({ message: 'hello', type: 'info', duration: 3000 }))
+    expect(handlerMock).toHaveBeenCalledWith('hello', 'info', 3000)
   })
 
-  it('success / warning / error 直映 EP 类型', async () => {
+  it('success / warning / error 直映类型', () => {
     notify('ok', 'success')
     notify('warn', 'warning')
     notify('bad', 'error')
-    await vi.waitFor(() => expect(messageMock).toHaveBeenCalledTimes(3))
-    const types = messageMock.mock.calls.map((c) => (c[0] as { type: string }).type)
+    expect(handlerMock).toHaveBeenCalledTimes(3)
+    const types = handlerMock.mock.calls.map((c) => c[1])
     expect(types).toEqual(['success', 'warning', 'error'])
   })
 
-  it('自定义时长透传，error 带关闭按钮', async () => {
+  it('自定义时长透传', () => {
     notify('custom', 'error', 2500)
-    await vi.waitFor(() => expect(messageMock).toHaveBeenCalled())
-    expect(messageMock).toHaveBeenCalledWith(expect.objectContaining({ duration: 2500, showClose: true }))
+    expect(handlerMock).toHaveBeenCalledWith('custom', 'error', 2500)
+  })
+
+  it('未注册 handler 时降级 console 且不抛错', () => {
+    __clearNotifyHandler()
+    expect(() => notify('fallback-info')).not.toThrow()
+    expect(() => notify('fallback-err', 'error')).not.toThrow()
+    expect(console.log).toHaveBeenCalledWith('[notify]', 'info', 'fallback-info')
+    expect(console.error).toHaveBeenCalledWith('[notify]', 'fallback-err')
+  })
+
+  it('handler 抛错时降级 console 且不抛错', () => {
+    registerNotifyHandler(() => { throw new Error('ep boom') })
+    expect(() => notify('x', 'error')).not.toThrow()
+    expect(console.error).toHaveBeenCalled()
   })
 })
