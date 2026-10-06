@@ -20,7 +20,7 @@ import { useBatchStore } from '@/stores/batch'
 import { useImageQueueStore } from '@/stores/imageQueue'
 import { useConnectionProfileStore } from '@/stores/connectionProfile'
 import { useLibraryStore } from '@/stores/library'
- import { __resetLoopTestState, refillFromEngine, prepareStartQueue, resolveLoopRandomMode, isPartialFallback } from '@/lib/imageLoop'
+import { __resetLoopTestState, refillFromEngine, prepareStartQueue, resolveLoopRandomMode, isPartialFallback, cancelRefill, resetRefillCancel } from '@/lib/imageLoop'
 
 function seedRunningLoop(concurrency = 2): void {
   const iq = useImageQueueStore()
@@ -244,3 +244,40 @@ describe('词库空节流 toast', () => {
      expect(engine.partialRandomAssembly).not.toHaveBeenCalled()
    })
  })
+
+describe('停止后启动恢复补货（回归）', () => {
+  it('cancelRefill 后 resetRefillCancel → refillFromEngine 恢复工作', async () => {
+    seedRunningLoop()
+    seedLibrary()
+    const engine = {
+      randomAssembly: vi.fn().mockReturnValue([{ segments: [], hash: () => 'h-restore' }]),
+      partialRandomAssembly: vi.fn().mockReturnValue([]),
+    }
+    // 模拟停止：cancelRefill 设置 refillCancelled = true
+    cancelRefill()
+    const blocked = await refillFromEngine(1, { engine: engine as never, push: (() => {}) as never })
+    expect(blocked).toEqual({ enqueued: 0, skipped: 0 })
+    expect(engine.randomAssembly).not.toHaveBeenCalled()
+    // 模拟启动：resetRefillCancel 清除标志
+    resetRefillCancel()
+    const restored = await refillFromEngine(1, { engine: engine as never, push: (() => {}) as never })
+    expect(restored.enqueued).toBe(1)
+    expect(engine.randomAssembly).toHaveBeenCalledTimes(1)
+  })
+
+  it('cancelRefill 后未 resetRefillCancel → refillFromEngine 持续阻塞', async () => {
+    seedRunningLoop()
+    seedLibrary()
+    const engine = {
+      randomAssembly: vi.fn().mockReturnValue([{ segments: [], hash: () => 'h-blocked' }]),
+      partialRandomAssembly: vi.fn().mockReturnValue([]),
+    }
+    cancelRefill()
+    // 不调用 resetRefillCancel，模拟旧行为
+    const r1 = await refillFromEngine(1, { engine: engine as never, push: (() => {}) as never })
+    const r2 = await refillFromEngine(1, { engine: engine as never, push: (() => {}) as never })
+    expect(r1).toEqual({ enqueued: 0, skipped: 0 })
+    expect(r2).toEqual({ enqueued: 0, skipped: 0 })
+    expect(engine.randomAssembly).not.toHaveBeenCalled()
+  })
+})
