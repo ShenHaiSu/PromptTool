@@ -5,6 +5,8 @@ import TranslateStep3 from '@/components/translate/TranslateStep3.vue'
 import { useTranslateDialog } from '@/composables/useTranslateDialog'
 import type { Dimension, Module } from '@/engine/models'
 import type { TranslationUpdateReport } from '@/lib/db'
+ import { computed } from 'vue'
+ import { useOverlayClose } from '@/composables/useOverlayClose'
 
 const props = defineProps<{
   open: boolean
@@ -25,6 +27,8 @@ const {
   onResultFileSelected, onParse, setRowSelected, selectAllValid, deselectAll, selectCurrentPage, invertSelection,
   startEditById, confirmEditById, cancelEdit, onApply, onChunkSizeChange, onPreviewChunk,
 } = useTranslateDialog(props, emitDlg)
+ 
+ const oc = useOverlayClose(() => { if (applying.value) return; onClose() }, { open: computed(() => props.open) })
 </script>
 
 <template>
@@ -32,7 +36,7 @@ const {
     v-if="open"
     data-testid="translate-dialog"
     class="fixed inset-0 z-40 flex items-center justify-center bg-black/40 p-4"
-    @click.self="onClose"
+     @mousedown="oc.onMouseDown" @click="oc.onClick"
   >
     <div
       data-testid="translate-dialog-overlay"

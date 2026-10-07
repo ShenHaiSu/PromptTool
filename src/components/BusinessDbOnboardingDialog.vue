@@ -122,6 +122,7 @@ async function handleBrowse(): Promise<void> {
 </script>
 
 <template>
+   <!-- need03 D2：引导流程不可遮罩关闭，有意禁用（保持空函数） -->
   <div
     v-if="open"
     data-testid="onboarding-dialog"

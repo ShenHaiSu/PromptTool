@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { ref } from 'vue'
+ import { ref, computed } from 'vue'
+ import { useOverlayClose } from '@/composables/useOverlayClose'
 import SegmentStep1 from '@/components/segment/SegmentStep1.vue'
 import SegmentStep2 from '@/components/segment/SegmentStep2.vue'
 import SegmentStep3 from '@/components/segment/SegmentStep3.vue'
@@ -9,6 +10,8 @@ const props = defineProps<{ open: boolean }>()
 const emit = defineEmits<{ (e: 'update:open', v: boolean): void; (e: 'imported'): void }>()
 
 const s = useSegmentImport(props, (e, v) => emit(e, v), (e) => emit(e))
+ 
+ const oc = useOverlayClose(() => { if (s.importing.value) return; s.onClose() }, { open: computed(() => props.open) })
 
 const selectedKeysList = (): string[] => [...s.selectedKeys.value]
 
@@ -20,7 +23,7 @@ const llmFileInput = ref<HTMLInputElement | null>(null)
   <div
     data-testid="segment-import-dialog"
     class="fixed inset-0 z-40 flex items-center justify-center bg-black/40 p-4"
-    @click.self="s.onClose()"
+     @mousedown="oc.onMouseDown" @click="oc.onClick"
   >
     <div
       data-testid="segment-import-overlay"

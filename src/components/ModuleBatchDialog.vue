@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref, computed, watch } from 'vue'
+import { useOverlayClose } from '@/composables/useOverlayClose'
 import { notify } from '@/lib/notify'
 import { dbBatchCreateModules } from '@/lib/db'
 import { parseBatchText } from '@/lib/moduleBatch'
@@ -58,6 +59,7 @@ watch(rawText, () => { curPage.value = 1 })
 function onClose(): void {
   emit('update:open', false)
 }
+const oc = useOverlayClose(onClose, { open: computed(() => props.open), isBusy: importing })
 
 function onClear(): void {
   rawText.value = ''
@@ -125,7 +127,7 @@ async function onCreate(): Promise<void> {
     v-if="open"
     data-testid="module-batch-dialog"
     class="fixed inset-0 z-40 flex items-center justify-center bg-black/40 p-4"
-    @click.self="onClose"
+    @mousedown="oc.onMouseDown" @click="oc.onClick"
   >
     <div
       data-testid="module-batch-overlay"

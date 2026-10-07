@@ -5,6 +5,7 @@ import { notify } from '@/lib/notify'
 import { dbExportLibrary, dbImportLibraryText, dbGetDefaultExportDir, dbExportLibraryToDir, dbRevealInExplorer } from '@/lib/db'
 import { displayPath } from '@/lib/pathDisplay'
 import type { ImportMode, LibraryImportReport } from '@/lib/db'
+ import { useOverlayClose } from '@/composables/useOverlayClose'
 
 const emit = defineEmits<{ (e: 'close'): void; (e: 'imported'): void }>()
 
@@ -136,6 +137,8 @@ async function onOpenDir(): Promise<void> {
 function close(): void {
   emit('close')
 }
+ 
+ const oc = useOverlayClose(close, { isBusy: importing })
 
 function onPickFile(): void {
   fileInput.value?.click()
@@ -171,7 +174,7 @@ const totalErrors = (): number => report.value?.errors.length ?? 0
   <div
     data-testid="library-dialog"
     class="fixed inset-0 z-40 flex items-center justify-center bg-black/40 p-4"
-    @click.self="close"
+     @mousedown="oc.onMouseDown" @click="oc.onClick"
   >
     <div class="flex max-h-[85vh] w-full max-w-lg flex-col rounded-lg border bg-background shadow-xl">
       <!-- 标题 -->

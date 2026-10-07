@@ -54,16 +54,46 @@ describe('PromptPreviewDialog', () => {
     expect(w.find('[data-testid="preview-ir-json"]').text()).toContain('white shirt')
   })
 
-  it('Esc 与遮罩点击触发 update:open false', async () => {
-    const w = mount(PromptPreviewDialog, { props: { open: true, prompt: 'x', warnings: [], ir: null }, global: { plugins: [createPinia()] } })
-    // close button
-    await w.find('[data-testid="preview-close-btn"]').trigger('click')
-    expect(w.emitted('update:open')?.[0]).toEqual([false])
-    // keydown Esc
-    const w2 = mount(PromptPreviewDialog, { props: { open: true, prompt: 'x', warnings: [], ir: null }, global: { plugins: [createPinia()] } })
-    await w2.find('[data-testid="preview-dialog-overlay"]').trigger('keydown', { key: 'Escape' })
-    expect(w2.emitted('update:open')).toBeTruthy()
-  })
+   it('遮罩四象限：仅外部按下＋外部松开关闭（need03 D2）', async () => {
+     function setup() {
+       return mount(PromptPreviewDialog, { props: { open: true, prompt: 'x', warnings: [], ir: null }, global: { plugins: [createPinia()] }, attachTo: document.body })
+     }
+     // 内-内：内容区点按不关
+     const w1 = setup()
+     await w1.find('[data-testid="preview-dialog"]').trigger('mousedown')
+     await w1.find('[data-testid="preview-dialog"]').trigger('click')
+     expect(w1.emitted('update:open')).toBeUndefined()
+     w1.unmount()
+     // 内-外：内部按下→外部松开不关（旧 @click.self 误关 bug）
+     const w2 = setup()
+     await w2.find('[data-testid="preview-dialog"]').trigger('mousedown')
+     await w2.find('[data-testid="preview-dialog-overlay"]').trigger('click')
+     expect(w2.emitted('update:open')).toBeUndefined()
+     w2.unmount()
+     // 外-内：外部按下→内部松开不关
+     const w3 = setup()
+     await w3.find('[data-testid="preview-dialog-overlay"]').trigger('mousedown')
+     await w3.find('[data-testid="preview-dialog"]').trigger('click')
+     expect(w3.emitted('update:open')).toBeUndefined()
+     w3.unmount()
+     // 外-外：关闭
+     const w4 = setup()
+     await w4.find('[data-testid="preview-dialog-overlay"]').trigger('mousedown')
+     await w4.find('[data-testid="preview-dialog-overlay"]').trigger('click')
+     expect(w4.emitted('update:open')).toEqual([[false]])
+     w4.unmount()
+   })
+ 
+   it('Esc（document 级）与关闭按钮触发 update:open false', async () => {
+     const w = mount(PromptPreviewDialog, { props: { open: true, prompt: 'x', warnings: [], ir: null }, global: { plugins: [createPinia()] }, attachTo: document.body })
+     await w.find('[data-testid="preview-close-btn"]').trigger('click')
+     expect(w.emitted('update:open')?.[0]).toEqual([false])
+     const w2 = mount(PromptPreviewDialog, { props: { open: true, prompt: 'x', warnings: [], ir: null }, global: { plugins: [createPinia()] }, attachTo: document.body })
+     document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
+     expect(w2.emitted('update:open')).toEqual([[false]])
+     w.unmount()
+     w2.unmount()
+   })
 
   it('有套装警告时 badge 显示套装互斥', () => {
     const ir = new PromptIR([], ['套装互斥：outfit 与 top 冲突'])

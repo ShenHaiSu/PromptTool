@@ -5,6 +5,8 @@ import GenerateStep3 from '@/components/generate/GenerateStep3.vue'
 import { useGenerateDialog } from '@/composables/useGenerateDialog'
 import type { Dimension, Module } from '@/engine/models'
 import type { BatchCreateReport } from '@/lib/db'
+ import { computed } from 'vue'
+ import { useOverlayClose } from '@/composables/useOverlayClose'
 
 const props = defineProps<{
   open: boolean
@@ -27,6 +29,8 @@ const {
   setRowSelected, selectAllValid, deselectAll, selectCurrentPage, invertSelection,
   onApply, onCountChange, onExampleCountChange,
 } = useGenerateDialog(props, emitDlg)
+ 
+ const oc = useOverlayClose(() => { if (applying.value) return; onClose() }, { open: computed(() => props.open) })
 </script>
 
 <template>
@@ -34,7 +38,7 @@ const {
     v-if="open"
     data-testid="generate-dialog"
     class="fixed inset-0 z-40 flex items-center justify-center bg-black/40 p-4"
-    @click.self="onClose"
+     @mousedown="oc.onMouseDown" @click="oc.onClick"
   >
     <div class="flex max-h-[86vh] w-full max-w-3xl flex-col rounded-lg border bg-background shadow-xl">
       <!-- Header -->

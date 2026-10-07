@@ -4,7 +4,9 @@ import { logger } from '@/lib/logger'
 import { useImageTaskDialog } from '@/composables/useImageTaskDialog'
 import { dbRevealInExplorer } from '@/lib/db'
 import { notify } from '@/lib/notify'
+ import { useOverlayClose } from '@/composables/useOverlayClose'
 const dialog = useImageTaskDialog()
+ const oc = useOverlayClose(() => dialog.close(), { open: dialog.opened, enableEscape: false })
  function onKeydown(e: KeyboardEvent): void {
    if (e.key === 'Escape' && dialog.opened.value) dialog.close()
  }
@@ -54,7 +56,7 @@ const dialog = useImageTaskDialog()
       v-if="dialog.opened.value"
       data-testid="image-task-detail-dialog"
       class="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
-      @click.self="dialog.close()"
+       @mousedown="oc.onMouseDown" @click="oc.onClick"
     >
        <el-card shadow="never" class="max-h-[80vh] w-full max-w-lg overflow-auto">
          <h4 class="text-sm font-semibold">生图任务详情</h4>

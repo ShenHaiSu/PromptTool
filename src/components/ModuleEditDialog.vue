@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref, watch, computed } from 'vue'
+import { useOverlayClose } from '@/composables/useOverlayClose'
 import type { Dimension, Module } from '@/engine/models'
 
 const props = withDefaults(defineProps<{
@@ -53,6 +54,7 @@ function onClose(): void {
   emit('update:open', false)
   emit('cancel')
 }
+const oc = useOverlayClose(onClose, { open: computed(() => props.open) })
 
 function onConfirm(): void {
   if (!dimensionId.value || !contentEn.value.trim()) return
@@ -68,7 +70,6 @@ function onConfirm(): void {
 }
 
 function onKeydown(e: KeyboardEvent): void {
-  if (e.key === 'Escape') onClose()
   if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) onConfirm()
 }
 </script>
@@ -78,8 +79,7 @@ function onKeydown(e: KeyboardEvent): void {
     v-if="open"
     data-testid="module-edit-dialog-overlay"
     class="fixed inset-0 z-40 flex items-center justify-center bg-black/40 p-4"
-    @click.self="onClose"
-    @keydown="onKeydown"
+    @mousedown="oc.onMouseDown" @click="oc.onClick" @keydown="onKeydown"
   >
     <el-dialog
       :model-value="open"
@@ -87,6 +87,7 @@ function onKeydown(e: KeyboardEvent): void {
       width="460px"
       destroy-on-close
       :append-to-body="false"
+      :modal="false" :close-on-click-modal="false" :close-on-press-escape="false"
       data-testid="module-edit-dialog"
       @close="onClose"
       @click.stop

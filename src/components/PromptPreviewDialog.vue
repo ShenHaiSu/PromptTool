@@ -6,6 +6,7 @@ import { evaluateRules } from '@/engine/ruleEngine'
 import { useRulesStore } from '@/stores/rules'
 import type { PromptIR } from '@/engine/models'
 import { logger } from '@/lib/logger'
+ import { useOverlayClose } from '@/composables/useOverlayClose'
 import IrConflictEditorDialog from './IrConflictEditorDialog.vue'
 
 const props = withDefaults(defineProps<{
@@ -88,6 +89,8 @@ function onClose(): void {
   emit('update:open', false)
   emit('close')
 }
+ 
+ const oc = useOverlayClose(() => { if (showIrEditor.value) return; onClose() }, { open: computed(() => props.open) })
 
 function toggleExpanded(): void {
   expanded.value = !expanded.value
@@ -134,13 +137,6 @@ function onExport(): void {
   notify('已导出 CSV', 'success', 1500)
 }
 
-function onKeydown(e: KeyboardEvent): void {
-  if (e.key === 'Escape') {
-    if (showIrEditor.value) return
-    onClose()
-  }
-}
-
 function onOpenIrEditor(): void {
   const store = getRulesStore()
   if (store && !store.loaded) void store.fetchAll().catch((err: unknown) => logger.warn('PromptPreview', 'fetchAll', err))
@@ -153,8 +149,7 @@ function onOpenIrEditor(): void {
     v-if="open"
     data-testid="preview-dialog-overlay"
     class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
-    @click.self="onClose"
-    @keydown="onKeydown"
+     @mousedown="oc.onMouseDown" @click="oc.onClick"
   >
     <div
       data-testid="preview-dialog"

@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { ref, watch } from 'vue'
+ import { ref, watch, computed } from 'vue'
+ import { useOverlayClose } from '@/composables/useOverlayClose'
 import type { Dimension } from '@/engine/models'
 
 // Need08 — 维度迁移确认对话框（单步确认，无步骤条）
@@ -23,6 +24,8 @@ function onClose(): void {
   if (props.busy) return
   emitDlg('update:open', false)
 }
+ 
+ const oc = useOverlayClose(onClose, { open: computed(() => props.open) })
 function onConfirm(): void {
   if (!agreed.value || props.busy) return
   emitDlg('confirm')
@@ -34,7 +37,7 @@ function onConfirm(): void {
     v-if="open"
     data-testid="migrate-dialog"
     class="fixed inset-0 z-40 flex items-center justify-center bg-black/40 p-4"
-    @click.self="onClose"
+     @mousedown="oc.onMouseDown" @click="oc.onClick"
   >
     <div class="flex max-h-[86vh] w-full max-w-lg flex-col rounded-lg border bg-background shadow-xl">
       <div class="flex items-center justify-between border-b px-4 py-3">

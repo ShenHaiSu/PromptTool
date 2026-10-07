@@ -4,7 +4,8 @@
  * 受控对话框：open 由父控，内部 draft 深拷贝，关闭时脏检查。
  * 左段表 + 右冲突/tabs + 底预览三区（展示层在 ir/ 下）。
  */
-import { watch } from 'vue'
+ import { watch, computed } from 'vue'
+ import { useOverlayClose } from '@/composables/useOverlayClose'
  import { type PromptIR, type AssemblyConfig, type Finding } from '@/engine/models'
  import { toSelectedItems } from '@/lib/irEdit'
 import { useIrEditor } from '@/composables/useIrEditor'
@@ -63,13 +64,14 @@ function onClose(): void {
   emitEv('update:open', false)
   emitEv('close')
 }
+ 
+ const oc = useOverlayClose(onClose, { open: computed(() => props.open) })
 
 function onKeydown(e: KeyboardEvent): void {
-  if (e.key === 'Escape') {
-    if (weightIdx.value != null) { cancelWeightFloat(); return }
-    onClose()
-    return
-  }
+   if (e.key === 'Escape') {
+     if (weightIdx.value != null) { cancelWeightFloat(); return }
+     return
+   }
   if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z' && !(e.target instanceof HTMLInputElement)) {
     e.preventDefault()
     onUndo()
@@ -170,8 +172,7 @@ watch(() => props.open, (v) => { if (v) { tab.value = 'findings'; ensureInit() }
     v-if="open"
     data-testid="ir-editor-overlay"
     class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
-    @click.self="onClose"
-    @keydown="onKeydown"
+     @mousedown="oc.onMouseDown" @click="oc.onClick" @keydown="onKeydown"
   >
     {{ ensureInit() }}
     <div data-testid="ir-editor-dialog" class="flex max-h-[min(84vh,800px)] w-[min(1120px,94vw)] flex-col rounded-lg border bg-background p-4 shadow-xl" @click.stop>

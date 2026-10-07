@@ -3,6 +3,7 @@ import { ref, computed, watch, onMounted, onBeforeUnmount } from 'vue'
 import { useStatsReport } from '@/composables/useStatsReport'
 import { notify } from '@/lib/notify'
 import { useImageQueueStore } from '@/stores/imageQueue'
+ import { useOverlayClose } from '@/composables/useOverlayClose'
  import {
    statsLedgerSummary,
    statsLedgerDaily,
@@ -19,6 +20,8 @@ import { useImageQueueStore } from '@/stores/imageQueue'
 
 const statsUi = useStatsReport()
 const iq = useImageQueueStore()
+ 
+ const oc = useOverlayClose(() => statsUi.close(), { open: statsUi.showStatsReport, enableEscape: false })
 
 const from = ref(addDaysStr(todayStr(), -6))
 const to = ref(todayStr())
@@ -157,7 +160,7 @@ watch(() => statsUi.showStatsReport.value, (open) => {
       v-if="statsUi.showStatsReport.value"
       data-testid="stats-report-dialog"
       class="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
-      @click.self="statsUi.close()"
+       @mousedown="oc.onMouseDown" @click="oc.onClick"
     >
       <el-card shadow="never" class="max-h-[85vh] w-full max-w-2xl overflow-auto">
         <div class="flex items-center gap-2">
