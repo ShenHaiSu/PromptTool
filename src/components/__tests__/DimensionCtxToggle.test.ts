@@ -57,24 +57,25 @@ describe('Need08 — 右键菜单开关项', () => {
     ])
   })
 
-  it('1. 菜单为 7 项两线，开关项在生成之后、清空之前', async () => {
-    const w = mountPanel()
-    await flush(w)
-    await w.find('[data-testid="dimension-header-pose"]').trigger('contextmenu', { clientX: 100, clientY: 100 })
-    await w.vm.$nextTick()
-    const menu = document.body.querySelector('[data-testid="dim-context-menu"]') as HTMLElement
-    expect(menu).toBeTruthy()
-    const order = [...menu.querySelectorAll('button')].map((b) => b.getAttribute('data-testid'))
-    expect(order).toEqual([
-      'dim-ctx-translate-pose',
-      'dim-ctx-generate-pose',
-      'dim-ctx-toggle-pose',
-      'dim-ctx-clear-pose',
-      'dim-ctx-migrate-pose',
-      'dim-ctx-copy-key-pose',
-      'dim-ctx-copy-name-pose',
-    ])
-    expect(menu.querySelectorAll('div.my-1').length).toBe(2)
+   it('1. 菜单为 8 项两线，排序项在生成之后、开关之前（need03 D1 辅入口）', async () => {
+     const w = mountPanel()
+     await flush(w)
+     await w.find('[data-testid="dimension-header-pose"]').trigger('contextmenu', { clientX: 100, clientY: 100 })
+     await w.vm.$nextTick()
+     const menu = document.body.querySelector('[data-testid="dim-context-menu"]') as HTMLElement
+     expect(menu).toBeTruthy()
+     const order = [...menu.querySelectorAll('button')].map((b) => b.getAttribute('data-testid'))
+     expect(order).toEqual([
+       'dim-ctx-translate-pose',
+       'dim-ctx-generate-pose',
+       'dim-ctx-order-pose',
+       'dim-ctx-toggle-pose',
+       'dim-ctx-clear-pose',
+       'dim-ctx-migrate-pose',
+       'dim-ctx-copy-key-pose',
+       'dim-ctx-copy-name-pose',
+     ])
+     expect(menu.querySelectorAll('div.my-1').length).toBe(2)
     // 去 Emoji：生成项精确文本
     expect(menu.querySelector('[data-testid="dim-ctx-generate-pose"]')?.textContent).toBe('片段批量生成')
     w.unmount()

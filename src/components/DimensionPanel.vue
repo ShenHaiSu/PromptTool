@@ -10,10 +10,15 @@ import SaveDialog from '@/components/SaveDialog.vue'
 import DimensionTranslateDialog from '@/components/DimensionTranslateDialog.vue'
 import DimensionGenerateDialog from '@/components/DimensionGenerateDialog.vue'
 import DimensionMigrateDialog from '@/components/DimensionMigrateDialog.vue'
+ import DimensionOrderDialog from '@/components/DimensionOrderDialog.vue'
 import { useDimensionPanel } from '@/composables/useDimensionPanel'
 import type { Module } from '@/engine/models'
+ import { useOverlayClose } from '@/composables/useOverlayClose'
 
 const p = useDimensionPanel()
+ 
+ // need03 D2：清空确认框遮罩“外部按下＋外部松开才关闭”（closeClearConfirm 已有 clearing 守卫）
+ const clearOc = useOverlayClose(() => p.closeClearConfirm(), { open: p.clearConfirmOpen })
 
 function onSelectedCardClick(ev: MouseEvent, moduleId: string): void {
   const m = findModule(moduleId)
@@ -43,6 +48,7 @@ defineExpose({ refresh: p.refresh, keyword: p.keyword, allowNsfw: p.allowNsfw, d
       @update:keyword="p.keyword.value = $event"
       @update:mode="p.dimPanelMode.value = $event"
       @create-dimension="p.onCreateDimension()"
+       @open-order="p.showOrderDialog.value = true"
       @toggle-nsfw="p.allowNsfw.value = !p.allowNsfw.value"
       @open-preview="p.previewOpen.value = true"
     />
@@ -154,6 +160,13 @@ defineExpose({ refresh: p.refresh, keyword: p.keyword, allowNsfw: p.allowNsfw, d
           class="flex w-full items-center rounded px-3 py-2 text-left text-sm hover:bg-accent"
           @click="p.onGenerateFromMenu()"
         >片段批量生成</button>
+         <button
+           :data-testid="`dim-ctx-order-${p.contextMenu.value.key}`"
+           role="menuitem"
+           title="拖拽调整维度顺序（替代手输序号）"
+           class="flex w-full items-center rounded px-3 py-2 text-left text-sm hover:bg-accent"
+           @click="p.onOrderFromMenu()"
+         >维度排序…</button>
         <button
           :data-testid="`dim-ctx-toggle-${p.contextMenu.value.key}`"
           role="menuitem"
@@ -205,7 +218,7 @@ defineExpose({ refresh: p.refresh, keyword: p.keyword, allowNsfw: p.allowNsfw, d
       role="dialog"
       aria-label="清空维度"
       class="fixed inset-0 z-40 flex items-center justify-center bg-black/40 p-4"
-      @click.self="p.closeClearConfirm()"
+       @mousedown="clearOc.onMouseDown" @click="clearOc.onClick"
     >
       <div class="w-[420px] rounded-lg border bg-card p-4 shadow-xl">
         <h3 class="text-sm font-semibold">清空维度</h3>
@@ -231,6 +244,12 @@ defineExpose({ refresh: p.refresh, keyword: p.keyword, allowNsfw: p.allowNsfw, d
       @update:open="p.migrateOpen.value = $event"
       @confirm="p.doMigrateDimension()"
     />
+ 
+     <DimensionOrderDialog
+       :open="p.showOrderDialog.value"
+       :dimensions="p.dimensions.value"
+       @update:open="p.showOrderDialog.value = $event"
+     />
 
     <Teleport to="body">
       <div v-if="p.activeWeightId.value" data-testid="selected-weight-popover" class="hidden" />

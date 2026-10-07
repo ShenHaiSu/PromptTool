@@ -304,6 +304,7 @@ export function useDimensionPanel() {
   const newModuleDimId = ref<string | null>(null)
   const showBatchDialog = ref(false)
   const batchDimension = ref<Dimension | null>(null)
+   const showOrderDialog = ref(false)
 
   const nsfwCount = computed(() => {
     let c = 0
@@ -479,6 +480,11 @@ export function useDimensionPanel() {
     closeContextMenu()
     openMigrateDialog(cur.dim)
   }
+   function onOrderFromMenu(): void {
+     if (!contextMenu.value) return
+     closeContextMenu()
+     showOrderDialog.value = true
+   }
 
   const clearTarget = ref<Dimension | null>(null)
   const clearConfirmOpen = ref(false)
@@ -611,8 +617,8 @@ export function useDimensionPanel() {
     toggleExpand, isExpanded, isSelected, onAdd,
     onCreateDimension, onEditDimension, onDimConfirm, onCreateModule, onEditModule, onModuleConfirm,
     onBatchCreate, onBatchImported, onDeleteModule, refresh,
-    contextMenu, menuPos, showTranslateDialog, translateTarget, showGenerateDialog, generateTarget,
-    onDimContextMenu, closeContextMenu, onTranslateFromMenu, onGenerateFromMenu, onToggleFromMenu, onClearFromMenu, onMigrateFromMenu,
+     contextMenu, menuPos, showTranslateDialog, translateTarget, showGenerateDialog, generateTarget, showOrderDialog,
+     onDimContextMenu, closeContextMenu, onTranslateFromMenu, onGenerateFromMenu, onToggleFromMenu, onClearFromMenu, onMigrateFromMenu, onOrderFromMenu,
     clearTarget, clearConfirmOpen, clearing, clearAgreed, clearCount, clearSelectedK, openClearConfirm, closeClearConfirm, doClearDimension,
     migrateTarget, migrateOpen, migrating, migrateCount, migrateSelectedK, openMigrateDialog, doMigrateDimension,
     onCopyDimKey, onCopyDimName,

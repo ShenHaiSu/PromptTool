@@ -15,7 +15,8 @@ defineProps<{
 const emit = defineEmits<{
   (e: 'update:keyword', v: string): void
   (e: 'update:mode', v: 'browse' | 'selected'): void
-  (e: 'create-dimension'): void
+   (e: 'create-dimension'): void
+   (e: 'open-order'): void
   (e: 'toggle-nsfw'): void
   (e: 'open-preview'): void
 }>()
@@ -60,6 +61,15 @@ const totalDims = computed(() => library.dimensions.length)
         >
           + 新建维度
         </el-button>
+         <el-button
+           data-testid="dimension-order-btn"
+           plain
+           size="small"
+           title="拖拽调整维度顺序（替代手输序号）"
+           @click="emit('open-order')"
+         >
+           ⇅ 维度排序
+         </el-button>
         <el-button
           data-testid="nsfw-pill"
           size="small"

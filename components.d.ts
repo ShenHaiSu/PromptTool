@@ -19,6 +19,7 @@ declare module 'vue' {
     DimensionGenerateDialog: typeof import('./src/components/DimensionGenerateDialog.vue')['default']
     DimensionList: typeof import('./src/components/dimension/DimensionList.vue')['default']
     DimensionMigrateDialog: typeof import('./src/components/DimensionMigrateDialog.vue')['default']
+    DimensionOrderDialog: typeof import('./src/components/DimensionOrderDialog.vue')['default']
     DimensionPanel: typeof import('./src/components/DimensionPanel.vue')['default']
     DimensionToolbar: typeof import('./src/components/dimension/DimensionToolbar.vue')['default']
     DimensionTranslateDialog: typeof import('./src/components/DimensionTranslateDialog.vue')['default']
